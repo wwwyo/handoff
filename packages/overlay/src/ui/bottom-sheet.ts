@@ -1,7 +1,8 @@
 import type { Comment } from '../core/types'
+import { type FocusTrapHandle, trapFocus } from './focus-trap'
 import type { PopoverCallbacks } from './popover'
 import { addSwipeToDismiss } from './swipe'
-import { ICON_MORE, ICON_RESOLVE, ICON_RESOLVED, ThreadView } from './thread-view'
+import { ICON_CLOSE, ICON_MORE, ICON_RESOLVE, ICON_RESOLVED, ThreadView } from './thread-view'
 
 /** モバイル版のコメント表示・返信入力(popover の同等 UI)。スワイプで閉じられる。 */
 export class BottomSheet {
@@ -12,6 +13,7 @@ export class BottomSheet {
   private readOnly = false
   private currentUser: string | null = null
   private threadView: ThreadView
+  private focusTrapHandle: FocusTrapHandle | null = null
 
   constructor(
     private parent: HTMLElement,
@@ -88,7 +90,16 @@ export class BottomSheet {
       actions.append(moreBtn, resolveBtn)
     }
 
-    // 閉じるボタンは置かない — スワイプか scrim タップで閉じる。
+    // スワイプ/scrim タップに加えて明示的な close ボタンも置く。ハンドルのピル1本だけでは
+    // ドラッグで閉じられることに初見のユーザーが気づけない(実機レビューで指摘)。
+    const closeBtn = document.createElement('button')
+    closeBtn.className = 'handoff-popover-titlebar-btn'
+    closeBtn.innerHTML = ICON_CLOSE
+    closeBtn.title = 'Close'
+    closeBtn.setAttribute('aria-label', 'Close comment')
+    closeBtn.addEventListener('click', () => this.hide(false))
+    actions.appendChild(closeBtn)
+
     titlebar.appendChild(actions)
     this.el.appendChild(titlebar)
 
@@ -132,11 +143,19 @@ export class BottomSheet {
     this.el.appendChild(scroll)
 
     if (!this.readOnly) {
-      this.el.appendChild(this.threadView.createReplyArea(this.currentUser, (text) => this.callbacks.onReply(comment.id, text)))
+      this.el.appendChild(
+        this.threadView.createReplyArea(
+          this.currentUser,
+          (text) => this.callbacks.onReply(comment.id, text),
+          undefined,
+          () => this.hide(false),
+        ),
+      )
     }
 
     this.parent.appendChild(this.scrim)
     this.parent.appendChild(this.el)
+    this.focusTrapHandle = trapFocus(this.el)
   }
 
   hide(isSwipe = false): void {
@@ -146,6 +165,8 @@ export class BottomSheet {
     this.el = null
     this.scrim = null
     this.currentCommentId = null
+    this.focusTrapHandle?.release()
+    this.focusTrapHandle = null
 
     this.callbacks.onClose?.()
 
@@ -172,6 +193,8 @@ export class BottomSheet {
 
   destroy(): void {
     this.hideMenu()
+    this.focusTrapHandle?.release()
+    this.focusTrapHandle = null
     this.el?.remove()
     this.scrim?.remove()
     this.el = null

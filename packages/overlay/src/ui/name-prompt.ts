@@ -1,3 +1,4 @@
+import { type FocusTrapHandle, trapFocus } from './focus-trap'
 import { addSwipeToDismiss } from './swipe'
 import { isMobileViewport } from './viewport'
 
@@ -44,8 +45,11 @@ export class NamePrompt {
         modal.appendChild(handle)
       }
 
+      let focusTrapHandle: FocusTrapHandle | undefined
+
       const closePrompt = (nameToResolve: string | null = null, isSwipe = false): void => {
         const finish = (): void => {
+          focusTrapHandle?.release()
           overlay.remove()
           if (mobile && !this.parent.querySelector('.handoff-sheet')) {
             document.body.style.overflow = ''
@@ -126,6 +130,7 @@ export class NamePrompt {
       overlay.appendChild(modal)
       this.parent.appendChild(overlay)
       if (!mobile) input.focus()
+      focusTrapHandle = trapFocus(modal)
     })
   }
 }

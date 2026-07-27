@@ -84,4 +84,56 @@ describe('AnchorTracker', () => {
     expect(degraded).toHaveBeenCalledTimes(1)
     expect(degraded.mock.calls[0]?.[0].resolution).toBe('text-quote')
   })
+
+  it('revalidate なしの update() はキャッシュ済み要素をそのまま使い、DOM を再クエリしない', () => {
+    const comments = [makeComment('a')]
+    const tracker = new AnchorTracker({ getComments: () => comments }, new EventEmitter(), () => {})
+
+    tracker.update() // 1回目: selector で解決してキャッシュする
+    const spy = vi.spyOn(document, 'querySelectorAll')
+
+    tracker.update() // 2回目: revalidate=false なのでキャッシュを使い、再クエリしない
+
+    expect(spy).not.toHaveBeenCalled()
+    spy.mockRestore()
+  })
+
+  it('revalidate=true で SPA が同じノードを使い回して中身だけ差し替えたケースを検出し、解決し直す', () => {
+    document.body.innerHTML = '<div id="a">unique original text</div>'
+    const comments = [makeComment('a')]
+    comments[0]!.anchor.textQuote = { exact: 'unique original text' }
+    const tracker = new AnchorTracker({ getComments: () => comments }, new EventEmitter(), () => {})
+
+    tracker.update() // 1回目: selector で解決してキャッシュする
+
+    // 同じノード（#a）を使い回したまま中身だけ差し替える。isConnected は真のまま
+    const el = document.getElementById('a')!
+    el.textContent = 'completely different content now'
+
+    const querySpy = vi.spyOn(document, 'querySelectorAll')
+    tracker.update(true) // revalidate=true: キャッシュ要素が textQuote と合わなくなったので解決し直す
+
+    // 再解決は resolveAnchorWithElement 経由で anchor.selector を document.querySelectorAll に
+    // 渡す（position.ts の queryBestElement）。ここが呼ばれていれば、キャッシュを使い回さず
+    // 解決し直したことの直接的な証拠になる。
+    expect(querySpy).toHaveBeenCalledWith(comments[0]!.anchor.selector)
+    querySpy.mockRestore()
+  })
+
+  it('revalidate=true でもキャッシュ要素が selector/textQuote に合致し続ける限りは解決し直さない', () => {
+    document.body.innerHTML = '<div id="a">unique original text</div>'
+    const comments = [makeComment('a')]
+    comments[0]!.anchor.textQuote = { exact: 'unique original text' }
+    const tracker = new AnchorTracker({ getComments: () => comments }, new EventEmitter(), () => {})
+
+    tracker.update() // 1回目: selector で解決してキャッシュする
+
+    const querySpy = vi.spyOn(document, 'querySelectorAll')
+    tracker.update(true) // 内容は変わっていないので再検証は通り、キャッシュ要素をそのまま使う
+
+    // textQuoteMatches は textContent の文字列比較のみで済ませており、DOM の再クエリを
+    // 発生させない。もし解決し直していれば anchor.selector で querySelectorAll が呼ばれるはず。
+    expect(querySpy).not.toHaveBeenCalledWith(comments[0]!.anchor.selector)
+    querySpy.mockRestore()
+  })
 })

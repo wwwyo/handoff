@@ -52,4 +52,59 @@ describe('ThreadView', () => {
 
     expect(row.textContent).toContain('Alice')
   })
+
+  describe('createReplyArea の送信キー(composer.ts と統一: Cmd/Ctrl+Enter で送信、素の Enter は改行)', () => {
+    it('素の Enter では送信されない', () => {
+      const parent = document.createElement('div')
+      const view = new ThreadView(parent)
+      const onReply = vi.fn()
+      const area = view.createReplyArea('Alice', onReply)
+      const textarea = area.querySelector('textarea') as HTMLTextAreaElement
+      textarea.value = 'line one'
+
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+
+      expect(onReply).not.toHaveBeenCalled()
+    })
+
+    it('Cmd+Enter で送信される', () => {
+      const parent = document.createElement('div')
+      const view = new ThreadView(parent)
+      const onReply = vi.fn()
+      const area = view.createReplyArea('Alice', onReply)
+      const textarea = area.querySelector('textarea') as HTMLTextAreaElement
+      textarea.value = 'reply text'
+
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true }))
+
+      expect(onReply).toHaveBeenCalledWith('reply text')
+    })
+
+    it('IME 変換中(isComposing)の Cmd+Enter では送信しない', () => {
+      const parent = document.createElement('div')
+      const view = new ThreadView(parent)
+      const onReply = vi.fn()
+      const area = view.createReplyArea('Alice', onReply)
+      const textarea = area.querySelector('textarea') as HTMLTextAreaElement
+      textarea.value = '変換中の文章'
+
+      textarea.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, isComposing: true, bubbles: true }),
+      )
+
+      expect(onReply).not.toHaveBeenCalled()
+    })
+
+    it('Escape で onCancel が呼ばれる(返信欄にフォーカスがあっても閉じられる)', () => {
+      const parent = document.createElement('div')
+      const view = new ThreadView(parent)
+      const onCancel = vi.fn()
+      const area = view.createReplyArea('Alice', vi.fn(), undefined, onCancel)
+      const textarea = area.querySelector('textarea') as HTMLTextAreaElement
+
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+
+      expect(onCancel).toHaveBeenCalled()
+    })
+  })
 })

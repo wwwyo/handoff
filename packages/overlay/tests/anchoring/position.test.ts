@@ -70,7 +70,8 @@ describe('createAnchor / resolveAnchor', () => {
     document.body.innerHTML = '<div id="target">テキスト</div>'
     const el = document.getElementById('target')!
     mockRect(el, { left: 0, top: 0, width: 100, height: 40 })
-    const anchor = createAnchor(el, 10, 10)
+    // 画面中央付近を指すアンカー。端の clamp に巻き込まれない位置を選ぶ
+    const anchor = createAnchor(el, window.innerWidth / 2, window.innerHeight / 2)
 
     // 要素ごと消す + テキストも変えて textQuote 解決を封じる
     document.body.innerHTML = '<div>まったく別の内容</div>'
@@ -80,6 +81,23 @@ describe('createAnchor / resolveAnchor', () => {
     expect(resolved.visible).toBe(true)
     expect(resolved.x).toBeCloseTo(window.innerWidth * anchor.viewportX + window.scrollX)
     expect(resolved.y).toBeCloseTo(window.innerHeight * anchor.viewportY + window.scrollY)
+  })
+
+  it('viewport フォールバックの座標は画面内に収める', () => {
+    document.body.innerHTML = '<div id="target">テキスト</div>'
+    const el = document.getElementById('target')!
+    mockRect(el, { left: 0, top: 0, width: 100, height: 40 })
+    // 画面の左上隅ちょうどを指すアンカー。clamp が無ければピンが画面外に出る
+    const anchor = createAnchor(el, 0, 0)
+
+    document.body.innerHTML = '<div>まったく別の内容</div>'
+
+    const resolved = resolveAnchor(anchor)
+    expect(resolved.resolution).toBe('viewport')
+    expect(resolved.x).toBeGreaterThan(0)
+    expect(resolved.y).toBeGreaterThan(0)
+    expect(resolved.x).toBeLessThan(window.innerWidth)
+    expect(resolved.y).toBeLessThan(window.innerHeight)
   })
 
   it('座標は page 座標系（scrollX/Y 込み）で返す', () => {

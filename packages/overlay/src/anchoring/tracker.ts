@@ -1,6 +1,7 @@
-import type { Comment, Resolution } from '../core/types'
+import type { Anchor, Comment, Resolution } from '../core/types'
 import type { EventEmitter } from '../core/events'
 import { resolveAnchorWithElement, resolveFromElement } from './position'
+import { textQuoteMatches } from './text-quote'
 
 export interface TrackedPosition {
   id: string
@@ -78,15 +79,24 @@ export class AnchorTracker {
     })
   }
 
-  /** テストや呼び出し側から即時再計算したいときのために公開しておく。 */
-  update(): void {
+  /**
+   * テストや呼び出し側から即時再計算したいときのために公開しておく。
+   *
+   * `revalidate` は scroll/resize の追従（デフォルト false）と、ホストが
+   * `refresh()` 経由で「DOM の意味が変わった」と明示的に伝えてきた場合を区別するための引数。
+   * false のときはキャッシュ済み要素を isConnected である限りそのまま使い、
+   * 毎フレーム querySelectorAll を回すレイアウトスラッシングを避ける。
+   * true のときは isConnected に加えてキャッシュ要素が今も selector/textQuote に
+   * 合致するかを確かめ、SPA が同じノードを使い回して中身だけ差し替えたケースを検出する。
+   */
+  update(revalidate = false): void {
     const comments = this.source.getComments()
     // 差分検出のため、解決前のスナップショットを取っておく（resolveOne が
     // this.lastResolution を書き換えるので、後で読むと「更新後」になってしまう）
     const previousResolutions = new Map(this.lastResolution)
 
     // read: rect 読み取りをここでまとめて行う
-    const positions: TrackedPosition[] = comments.map((comment) => this.resolveOne(comment))
+    const positions: TrackedPosition[] = comments.map((comment) => this.resolveOne(comment, revalidate))
 
     // write: DOM 反映は呼び出し側（UI 層）に任せる
     this.onUpdate(positions)
@@ -100,10 +110,10 @@ export class AnchorTracker {
     this.forgetStaleComments(comments)
   }
 
-  private resolveOne(comment: Comment): TrackedPosition {
+  private resolveOne(comment: Comment, revalidate: boolean): TrackedPosition {
     const cached = this.resolvedElements.get(comment.id)?.deref()
 
-    if (cached?.isConnected) {
+    if (cached?.isConnected && (!revalidate || this.stillValid(cached, comment.anchor))) {
       const resolution = this.lastResolution.get(comment.id) ?? 'selector'
       const result = resolveFromElement(cached, comment.anchor, resolution)
       return { id: comment.id, x: result.x, y: result.y, resolution: result.resolution, visible: result.visible }
@@ -118,6 +128,23 @@ export class AnchorTracker {
     this.lastResolution.set(comment.id, result.resolution)
 
     return { id: comment.id, x: result.x, y: result.y, resolution: result.resolution, visible: result.visible }
+  }
+
+  /**
+   * revalidate 時に、キャッシュ済み要素が今もそのアンカーの指す対象と言えるかを確かめる。
+   * isConnected だけでは「ノードは残っているが SPA が中身を差し替えた」ケースを検出できない
+   * ため、textQuote があれば textContent まで見る。textQuote が無い（selector のみの）
+   * アンカーは selector 一致で代用する。
+   */
+  private stillValid(cached: Element, anchor: Anchor): boolean {
+    if (anchor.textQuote) {
+      return textQuoteMatches(cached, anchor.textQuote)
+    }
+    try {
+      return Array.from(document.querySelectorAll(anchor.selector)).includes(cached)
+    } catch {
+      return false
+    }
   }
 
   /**

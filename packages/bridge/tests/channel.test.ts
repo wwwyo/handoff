@@ -72,6 +72,38 @@ describe('createChannel', () => {
     expect(received[0]?.content).toContain('untrusted user comment')
   })
 
+  it('既存 id の更新では通知が飛ばない。新規 id では飛ぶ', async () => {
+    const store = new CommentStore()
+    const channel = createChannel({ store })
+
+    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair()
+    const client = new Client({ name: 'test-client', version: '0.0.1' })
+
+    const received: Array<{ content: string; meta: Record<string, string> }> = []
+    client.setNotificationHandler(
+      z.object({
+        method: z.literal('notifications/claude/channel'),
+        params: z.object({ content: z.string(), meta: z.record(z.string(), z.string()) }),
+      }),
+      async (notification) => {
+        received.push(notification.params)
+      },
+    )
+
+    await Promise.all([channel.mcp.connect(serverTransport), client.connect(clientTransport)])
+
+    store.add(makeComment({ id: 'c1' }), PAGE_URL)
+    await vi.waitFor(() => expect(received).toHaveLength(1))
+
+    // 既存 id (c1) を編集扱いで再送 -> 通知は増えない
+    store.add(makeComment({ id: 'c1', unread: false }), PAGE_URL)
+    // 新規 id (c2) -> 通知が増える
+    store.add(makeComment({ id: 'c2' }), PAGE_URL)
+
+    await vi.waitFor(() => expect(received).toHaveLength(2))
+    expect(received.map((r) => r.meta.comment_id)).toEqual(['c1', 'c2'])
+  })
+
   it('reply tool を呼ぶと該当コメントに返信が積まれる', async () => {
     const store = new CommentStore()
     store.add(makeComment(), PAGE_URL)

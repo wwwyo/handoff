@@ -45,6 +45,10 @@ export class Store {
   private loadPromise: Promise<void> | null = null
   private pendingChanges = new Map<string, StoreChange>()
   private debounceTimer: ReturnType<typeof setTimeout> | null = null
+  /** 進行中の adapter.save() があるか。並行 save でリモートが古い状態に巻き戻るのを防ぐため直列化する。 */
+  private saving = false
+  /** saving 中に flush() が呼ばれた場合、完了後にもう一度だけ flush する。 */
+  private flushPending = false
 
   constructor(
     private events: EventEmitter,
@@ -188,10 +192,17 @@ export class Store {
   }
 
   replaceAll(comments: Comment[]): void {
+    // 旧集合と新集合の差分を取り、消えたコメントは delete change として積む。
+    // 差分しか見ない adapter（HTTP bridge 等）に削除を伝えるため。
+    const removedIds = new Set(this.comments.keys())
     this.comments.clear()
     for (const comment of comments) {
       this.comments.set(comment.id, comment)
+      removedIds.delete(comment.id)
       this.queueChange({ op: 'upsert', comment })
+    }
+    for (const id of removedIds) {
+      this.queueChange({ op: 'delete', id })
     }
   }
 
@@ -235,14 +246,40 @@ export class Store {
       clearTimeout(this.debounceTimer)
       this.debounceTimer = null
     }
+
+    if (this.saving) {
+      // 進行中の save がある間は次を待たせ、完了後にまとめて 1 回だけ再実行する
+      this.flushPending = true
+      return
+    }
     if (this.pendingChanges.size === 0) return
 
     const changes = [...this.pendingChanges.values()]
     this.pendingChanges.clear()
     const all = this.getComments()
+    this.saving = true
 
-    Promise.resolve(this.adapter.save(changes, all)).catch((error: unknown) => {
-      this.events.emit('storage:error', { phase: 'save', error })
-    })
+    Promise.resolve(this.adapter.save(changes, all))
+      .catch((error: unknown) => {
+        // 失敗した変更は pending に戻して再送する。ただし save 中に同じ id への
+        // 新しい変更が既に積まれていれば、そちらが最新なので古い内容で上書きしない。
+        for (const change of changes) {
+          const key = change.op === 'delete' ? change.id : change.comment.id
+          if (!this.pendingChanges.has(key)) {
+            this.pendingChanges.set(key, change)
+          }
+        }
+        this.events.emit('storage:error', { phase: 'save', error })
+      })
+      .finally(() => {
+        this.saving = false
+        // saving 中に新しい変更で flush() が要求されていた場合のみ即座に再実行する。
+        // save 失敗で再キューされただけの変更は、次に queueChange が起きるまで待つ
+        // （reject のたびに即時リトライし続けると無限ループになるため）。
+        if (this.flushPending) {
+          this.flushPending = false
+          this.flush()
+        }
+      })
   }
 }

@@ -44,6 +44,12 @@ export interface TextQuote {
   /** 同じ exact が複数ある場合に絞り込むための、直前・直後の兄弟テキスト。 */
   prefix?: string
   suffix?: string
+  /**
+   * 対象要素の tag 名（小文字）。祖先・子孫が同じ textContent を持つ場合に
+   * 「元要素と同じ素性」の候補へ絞り込むための追加ヒント。旧バージョンが書き出した
+   * JSON には存在しないため optional にし、無ければ従来どおりの絞り込みで解決する。
+   */
+  tagName?: string
 }
 
 /** アンカーがどの層で解決されたか。UI とイベントで「見失った」ことを明示するために使う。 */

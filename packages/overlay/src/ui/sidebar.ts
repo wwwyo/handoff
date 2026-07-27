@@ -1,6 +1,9 @@
 import type { Comment } from '../core/types'
 import { ICON_AGENT } from '../styles/tokens'
+import { type FocusTrapHandle, trapFocus } from './focus-trap'
 import { formatTime } from './format'
+import { addSwipeToDismiss } from './swipe'
+import { isMobileViewport } from './viewport'
 
 export interface SidebarCallbacks {
   onCommentClick: (commentId: string) => void
@@ -22,6 +25,11 @@ export class Sidebar {
   private activeCommentId: string | null = null
   private filterButtons: HTMLButtonElement[] = []
   private filterSlider: HTMLDivElement
+  private handle: HTMLDivElement
+  private scrim: HTMLDivElement | null = null
+  private focusTrapHandle: FocusTrapHandle | null = null
+  private visible = false
+  private viewportCleanup: (() => void) | null = null
 
   constructor(
     private parent: HTMLElement,
@@ -30,6 +38,17 @@ export class Sidebar {
     this.el = document.createElement('div')
     this.el.className = 'handoff-sidebar handoff-sidebar-right'
     this.el.style.pointerEvents = 'auto'
+
+    // モバイル幅では bottom sheet として振る舞う。ハンドルは常に生成しておき、
+    // sheet クラスが付いたときだけ CSS 側で表示・スワイプで閉じられるようにする。
+    this.handle = document.createElement('div')
+    this.handle.className = 'handoff-sheet-handle handoff-sidebar-sheet-handle'
+    const pill = document.createElement('div')
+    pill.className = 'handoff-sheet-handle-pill'
+    this.handle.appendChild(pill)
+    this.el.appendChild(this.handle)
+    addSwipeToDismiss(this.handle, this.el, () => this.callbacks.onClose?.())
+    this.watchViewport()
 
     const header = document.createElement('div')
     header.className = 'handoff-sidebar-header'
@@ -99,11 +118,71 @@ export class Sidebar {
   }
 
   setVisible(visible: boolean): void {
-    this.el.style.display = visible ? '' : 'none'
+    this.visible = visible
+    if (visible) {
+      this.applyPresentation()
+      this.el.style.display = ''
+      // review モード中はホストページへフォーカスが抜けないようにする。
+      this.focusTrapHandle = trapFocus(this.el)
+    } else {
+      this.teardownSheet()
+      this.el.style.display = 'none'
+      this.focusTrapHandle?.release()
+      this.focusTrapHandle = null
+    }
+  }
+
+  /**
+   * 幅に応じて右ドックと bottom sheet を切り替える。
+   * 表示中のリサイズ（端末の回転など）でも呼ぶ。開いた瞬間の幅で決め打ちすると、
+   * 回転後に画面の大半を覆うドックが残ったままになる。
+   */
+  private applyPresentation(): void {
+    if (isMobileViewport()) {
+      if (this.scrim) return
+      this.el.classList.add('handoff-sidebar-sheet')
+      this.scrim = document.createElement('div')
+      this.scrim.className = 'handoff-sheet-scrim'
+      this.scrim.style.touchAction = 'none'
+      this.scrim.addEventListener('click', () => this.callbacks.onClose?.())
+      this.parent.insertBefore(this.scrim, this.el)
+      document.body.style.overflow = 'hidden'
+      document.documentElement.style.overflow = 'hidden'
+    } else {
+      this.teardownSheet()
+    }
+  }
+
+  private teardownSheet(): void {
+    this.el.classList.remove('handoff-sidebar-sheet')
+    this.scrim?.remove()
+    this.scrim = null
+    if (!this.parent.querySelector('.handoff-sheet-scrim, .handoff-sheet')) {
+      document.body.style.overflow = ''
+      document.documentElement.style.overflow = ''
+    }
   }
 
   destroy(): void {
+    this.viewportCleanup?.()
+    this.viewportCleanup = null
+    this.focusTrapHandle?.release()
+    this.focusTrapHandle = null
+    this.scrim?.remove()
     this.el.remove()
+  }
+
+  /**
+   * isMobileViewport() は pointer 種別と幅の組み合わせで判定しており単一のメディアクエリに
+   * 落とせないため、resize を購読して都度評価し直す。applyPresentation は冪等なので
+   * 連続発火しても問題にならず、debounce は要らない。
+   */
+  private watchViewport(): void {
+    const onResize = (): void => {
+      if (this.visible) this.applyPresentation()
+    }
+    window.addEventListener('resize', onResize, { passive: true })
+    this.viewportCleanup = () => window.removeEventListener('resize', onResize)
   }
 
   private renderList(): void {
@@ -193,11 +272,18 @@ export class Sidebar {
     content.append(badge, body)
 
     // 未読バッジ。resolved は既読/未読に関わらずフェード表示なので対象外。
+    // 裸の <span> に aria-label を付けても role が無いスクリーンリーダーには読み上げられないため、
+    // ドット自体は装飾として隠し、視覚的に隠したテキストで意味を伝える。
     if (comment.unread && !comment.resolved) {
       const unreadDot = document.createElement('span')
       unreadDot.className = 'handoff-sidebar-unread-dot'
-      unreadDot.setAttribute('aria-label', 'unread')
-      content.appendChild(unreadDot)
+      unreadDot.setAttribute('aria-hidden', 'true')
+
+      const srText = document.createElement('span')
+      srText.className = 'handoff-sr-only'
+      srText.textContent = 'unread'
+
+      content.append(unreadDot, srText)
     }
 
     row.appendChild(content)

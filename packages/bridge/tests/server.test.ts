@@ -150,4 +150,88 @@ describe('server', () => {
     const body = (await getRes.json()) as { comments: Comment[] }
     expect(body.comments.map((c) => c.id).sort()).toEqual(['c2', 'c3', 'other-page'])
   })
+
+  it('同じ id で2回 POST しても重複しない（GET が1件を返す）', async () => {
+    await fetch(`${baseUrl}/comments`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ comment: makeComment(), url: PAGE_URL }),
+    })
+    await fetch(`${baseUrl}/comments`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ comment: makeComment({ text: '編集後' }), url: PAGE_URL }),
+    })
+
+    const getRes = await fetch(`${baseUrl}/comments`, {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    })
+    const body = (await getRes.json()) as { comments: Comment[] }
+    expect(body.comments).toHaveLength(1)
+    expect(body.comments[0]?.text).toBe('編集後')
+  })
+
+  it('必須フィールド（anchor）が欠けた body は 400', async () => {
+    const { anchor: _anchor, ...withoutAnchor } = makeComment()
+    const res = await fetch(`${baseUrl}/comments`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ comment: withoutAnchor, url: PAGE_URL }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('必須フィールド（id）が欠けた body は 400', async () => {
+    const { id: _id, ...withoutId } = makeComment()
+    const res = await fetch(`${baseUrl}/comments`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ comment: withoutId, url: PAGE_URL }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('空 Bearer トークンは拒否される', async () => {
+    const res = await fetch(`${baseUrl}/comments`, {
+      headers: { Authorization: 'Bearer ' },
+    })
+    expect(res.status).toBe(401)
+  })
+
+  it('token に空文字を渡すと createServer が起動時に例外を投げる', () => {
+    const store = new CommentStore()
+    expect(() => createServer({ store, token: '', allowedOrigins: ['http://localhost:*'] })).toThrow()
+  })
+
+  it('allowedOrigins に "*" 単体を渡すと createServer が起動時に例外を投げる', () => {
+    const store = new CommentStore()
+    expect(() => createServer({ store, token: TOKEN, allowedOrigins: ['*'] })).toThrow()
+  })
+})
+
+describe('server (body size limit)', () => {
+  it('サイズ超過の body は 413 になる', async () => {
+    const store = new CommentStore()
+    const httpServer = createServer({
+      store,
+      token: TOKEN,
+      allowedOrigins: ['http://localhost:*'],
+      maxBodyBytes: 100,
+    })
+    await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
+    const { port } = httpServer.address() as AddressInfo
+    const baseUrl = `http://127.0.0.1:${port}`
+
+    try {
+      const oversizedComment = makeComment({ text: 'x'.repeat(1000) })
+      const res = await fetch(`${baseUrl}/comments`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comment: oversizedComment, url: PAGE_URL }),
+      })
+      expect(res.status).toBe(413)
+    } finally {
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()))
+    }
+  })
 })

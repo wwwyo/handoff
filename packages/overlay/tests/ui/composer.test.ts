@@ -57,6 +57,38 @@ describe('Composer', () => {
     expect(onSubmit).toHaveBeenCalledWith('ctrl variant')
   })
 
+  it('素の Enter では送信されない(改行に使うため)', () => {
+    parent = document.createElement('div')
+    document.body.appendChild(parent)
+    const onSubmit = vi.fn()
+    composer = new Composer(parent, { onSubmit, onCancel: vi.fn() })
+    composer.show({ x: 100, y: 100 })
+
+    const textarea = parent.querySelector('textarea') as HTMLTextAreaElement
+    textarea.value = 'line one'
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
+  it('IME 変換中(isComposing)の Cmd+Enter では送信しない', () => {
+    parent = document.createElement('div')
+    document.body.appendChild(parent)
+    const onSubmit = vi.fn()
+    composer = new Composer(parent, { onSubmit, onCancel: vi.fn() })
+    composer.show({ x: 100, y: 100 })
+
+    const textarea = parent.querySelector('textarea') as HTMLTextAreaElement
+    textarea.value = '変換中'
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    textarea.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, isComposing: true, bubbles: true }),
+    )
+
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
   it('Escape で onCancel が呼ばれる', () => {
     parent = document.createElement('div')
     document.body.appendChild(parent)
@@ -91,6 +123,24 @@ describe('Composer', () => {
     expect(submitted).toBe(payload)
     // textarea.value として保持されるだけで、DOM 内に <img> 要素は生成されない。
     expect(parent.querySelector('img')).toBeNull()
+  })
+
+  it('モバイル幅では close ボタン付きの bottom sheet になる', () => {
+    parent = document.createElement('div')
+    document.body.appendChild(parent)
+    const originalMatchMedia = window.matchMedia
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 })
+    window.matchMedia = vi.fn().mockReturnValue({ matches: true }) as unknown as typeof window.matchMedia
+
+    composer = new Composer(parent, { onSubmit: vi.fn(), onCancel: vi.fn() })
+    composer.show({ x: 100, y: 100 })
+
+    expect(parent.querySelector('.handoff-sheet')).not.toBeNull()
+    const closeBtn = parent.querySelector('.handoff-popover-titlebar-btn[aria-label="Cancel new comment"]')
+    expect(closeBtn).not.toBeNull()
+
+    window.matchMedia = originalMatchMedia
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1280 })
   })
 
   it('show() は仮ピンと入力欄を出し、hide() で両方消える', () => {

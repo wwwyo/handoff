@@ -1,3 +1,5 @@
+import { type FocusTrapHandle, trapFocus } from './focus-trap'
+
 const ICON_CLOSE =
   '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>'
 
@@ -27,14 +29,19 @@ export class ConfirmModal {
       const title = document.createElement('h3')
       title.textContent = options.title
 
+      let focusTrapHandle: FocusTrapHandle | undefined
+
+      const close = (result: boolean): void => {
+        focusTrapHandle?.release()
+        overlay.remove()
+        resolve(result)
+      }
+
       const closeBtn = document.createElement('button')
       closeBtn.className = 'handoff-sidebar-icon-btn'
       closeBtn.innerHTML = ICON_CLOSE
       closeBtn.title = 'Close'
-      closeBtn.addEventListener('click', () => {
-        overlay.remove()
-        resolve(false)
-      })
+      closeBtn.addEventListener('click', () => close(false))
 
       header.append(title, closeBtn)
 
@@ -47,24 +54,22 @@ export class ConfirmModal {
       const confirmBtn = document.createElement('button')
       confirmBtn.className = options.destructive ? 'handoff-name-submit handoff-btn-destructive' : 'handoff-name-submit'
       confirmBtn.textContent = options.confirmLabel
-      confirmBtn.addEventListener('click', () => {
-        overlay.remove()
-        resolve(true)
-      })
+      confirmBtn.addEventListener('click', () => close(true))
 
       body.append(desc, confirmBtn)
       modal.append(header, body)
 
       overlay.addEventListener('click', (e) => {
-        if (e.target === overlay) {
-          overlay.remove()
-          resolve(false)
-        }
+        if (e.target === overlay) close(false)
+      })
+      modal.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') close(false)
       })
 
       overlay.appendChild(modal)
       this.parent.appendChild(overlay)
       confirmBtn.focus()
+      focusTrapHandle = trapFocus(modal)
     })
   }
 }

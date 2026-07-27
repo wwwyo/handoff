@@ -1,7 +1,8 @@
 import { PIN_COLOR, avatarColor, pinPlaceholderSvgHtml } from '../styles/tokens'
+import { type FocusTrapHandle, trapFocus } from './focus-trap'
 import { computeFloatingPosition } from './position'
 import { addSwipeToDismiss } from './swipe'
-import { ICON_SEND } from './thread-view'
+import { ICON_CLOSE, ICON_SEND } from './thread-view'
 import { isMobileViewport } from './viewport'
 
 export interface ComposerCallbacks {
@@ -20,6 +21,7 @@ export class Composer {
   private pinMarker: HTMLDivElement | null = null
   private scrim: HTMLDivElement | null = null
   private currentUser: string | null = null
+  private focusTrapHandle: FocusTrapHandle | null = null
 
   constructor(
     private parent: HTMLElement,
@@ -41,6 +43,8 @@ export class Composer {
   }
 
   hide(): void {
+    this.focusTrapHandle?.release()
+    this.focusTrapHandle = null
     this.el?.remove()
     this.pinMarker?.remove()
     this.scrim?.remove()
@@ -100,7 +104,8 @@ export class Composer {
 
     textarea.addEventListener('keydown', (e) => {
       // Cmd/Ctrl+Enter で送信。Enter 単体は改行に使うため奪わない。
-      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && textarea.value.trim()) {
+      // IME 変換確定の Enter (isComposing) では送信しない — 日本語入力での誤送信対策。
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing && textarea.value.trim()) {
         e.preventDefault()
         submit()
       }
@@ -143,6 +148,7 @@ export class Composer {
     this.el.style.top = `${top}px`
 
     textarea.focus()
+    this.focusTrapHandle = trapFocus(this.el)
   }
 
   private showMobile(): void {
@@ -171,6 +177,17 @@ export class Composer {
     const titleLabel = document.createElement('span')
     titleLabel.textContent = 'New Comment'
     titlebar.appendChild(titleLabel)
+
+    // ハンドルのピル1本だけではスワイプで閉じられることに初見のユーザーが気づけないため、
+    // 明示的な close ボタンも置く(実機レビューで指摘)。
+    const closeBtn = document.createElement('button')
+    closeBtn.className = 'handoff-popover-titlebar-btn'
+    closeBtn.innerHTML = ICON_CLOSE
+    closeBtn.title = 'Close'
+    closeBtn.setAttribute('aria-label', 'Cancel new comment')
+    closeBtn.addEventListener('click', () => this.callbacks.onCancel())
+    titlebar.appendChild(closeBtn)
+
     this.el.appendChild(titlebar)
 
     const inputArea = document.createElement('div')
@@ -181,6 +198,7 @@ export class Composer {
 
     this.parent.appendChild(this.scrim)
     this.parent.appendChild(this.el)
+    this.focusTrapHandle = trapFocus(this.el)
 
     setTimeout(() => textarea.focus(), 50)
   }

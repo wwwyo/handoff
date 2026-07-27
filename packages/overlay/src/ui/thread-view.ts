@@ -113,8 +113,17 @@ export class ThreadView {
     return row
   }
 
-  /** 返信入力欄。avatar + 自動伸縮 textarea + 送信ボタン。 */
-  createReplyArea(currentUser: string | null, onReply: (text: string) => void, onInput?: () => void): HTMLDivElement {
+  /**
+   * 返信入力欄。avatar + 自動伸縮 textarea + 送信ボタン。
+   * Cmd/Ctrl+Enter で送信・素の Enter は改行(composer.ts と統一。日本語入力の変換確定 Enter で
+   * 誤送信しないため)。IME 変換中(`e.isComposing`)は送信しない。
+   */
+  createReplyArea(
+    currentUser: string | null,
+    onReply: (text: string) => void,
+    onInput?: () => void,
+    onCancel?: () => void,
+  ): HTMLDivElement {
     const replyArea = document.createElement('div')
     replyArea.className = 'handoff-popover-reply-area'
 
@@ -155,9 +164,12 @@ export class ThreadView {
     }
 
     textarea.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey && textarea.value.trim()) {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing && textarea.value.trim()) {
         e.preventDefault()
         send()
+      }
+      if (e.key === 'Escape') {
+        onCancel?.()
       }
       e.stopPropagation()
     })
@@ -276,7 +288,8 @@ export class ThreadView {
     }
 
     textarea.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey && textarea.value.trim()) {
+      // 返信入力欄と同じく Cmd/Ctrl+Enter で保存、素の Enter は改行。
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing && textarea.value.trim()) {
         e.preventDefault()
         save()
       }

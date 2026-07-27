@@ -32,6 +32,7 @@ import { Toolbar } from './ui/toolbar'
 import { KeyboardHandler } from './ui/keyboard'
 import { NamePrompt } from './ui/name-prompt'
 import { ConfirmModal } from './ui/confirm-modal'
+import { Toast } from './ui/toast'
 
 const MOBILE_QUERY = '(max-width: 640px)'
 
@@ -54,6 +55,7 @@ class HandoffLayer {
   private readonly keyboard: KeyboardHandler
   private readonly namePrompt: NamePrompt
   private readonly confirmModal: ConfirmModal
+  private readonly toast: Toast
   private readonly tracker: AnchorTracker
 
   private readonly options: HandoffOptions & { zIndex: number; storageKey: string; readOnly: boolean }
@@ -139,6 +141,18 @@ class HandoffLayer {
 
     this.namePrompt = new NamePrompt(shadowContent)
     this.confirmModal = new ConfirmModal(shadowContent)
+    this.toast = new Toast(shadowContent)
+
+    // 保存の失敗は黙って飲み込まない。コメントは楽観的に画面へ出ているため、
+    // 伝えないとユーザーは残ったと思ってタブを閉じ、指摘そのものを失う
+    this.events.on('storage:error', ({ phase }) => {
+      this.toast.show(
+        phase === 'save'
+          ? 'Could not save your comments. They may be lost if you close this page.'
+          : 'Could not load saved comments.',
+        { variant: 'error' },
+      )
+    })
 
     this.tracker = new AnchorTracker(this.store, this.events, (positions) => this.onPositions(positions))
 
@@ -358,7 +372,8 @@ class HandoffLayer {
   /** ホスト側がルートや表示状態を切り替えたあとに呼ぶ。可視性とピン位置を再評価する。 */
   refresh(): void {
     if (this.destroyed) return
-    this.tracker.update()
+    // ホストが明示的に呼ぶ = ルート遷移や表示状態の変化。要素キャッシュを疑ってかかる
+    this.tracker.update(true)
     this.renderPins()
     this.sidebar.update(this.visibleComments())
     this.toolbar.setCommentCount(this.visibleComments().filter((c) => !c.resolved).length)
@@ -366,6 +381,9 @@ class HandoffLayer {
 
   destroy(): void {
     this.destroyed = true
+    // ホストページに書き込んだ outline を先に戻す。
+    // コンテナを消してからでは退避した値を書き戻す相手を失う
+    this.clearHighlight()
     this.tracker.stop()
     this.keyboard.detach()
     this.themeMediaCleanup?.()
@@ -375,6 +393,7 @@ class HandoffLayer {
     this.sheet.destroy()
     this.sidebar.destroy()
     this.toolbar.destroy()
+    this.toast.destroy()
     this.store.destroy()
     destroyContainer(this.container)
   }
@@ -628,6 +647,9 @@ class HandoffLayer {
       // ファイル未選択は正常な離脱なので黙って戻る。壊れた JSON だけを知らせる
       if (error instanceof Error && error.message === 'No file selected') return
       console.error('handoff: import failed', error)
+      this.toast.show('Could not import that file. It may be corrupted or from a newer version.', {
+        variant: 'error',
+      })
     }
   }
 

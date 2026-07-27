@@ -1,4 +1,5 @@
 import type { Comment } from '../core/types'
+import { type FocusTrapHandle, trapFocus } from './focus-trap'
 import { computeFloatingPosition } from './position'
 import { ICON_CLOSE, ICON_MORE, ICON_RESOLVE, ICON_RESOLVED, ThreadView } from './thread-view'
 
@@ -23,6 +24,7 @@ export class Popover {
   private readOnly = false
   private currentUser: string | null = null
   private threadView: ThreadView
+  private focusTrapHandle: FocusTrapHandle | null = null
 
   constructor(
     private parent: HTMLElement,
@@ -141,6 +143,7 @@ export class Popover {
           () => {
             if (this.currentPosition) this.updatePosition(this.currentPosition)
           },
+          () => this.hide(),
         ),
       )
     }
@@ -149,11 +152,15 @@ export class Popover {
     // 高さが確定してから再配置(下端はみ出しの検出のため)
     this.updatePosition(position)
     this.el.focus()
+    // ホストページへ Tab で抜けられないようにする。
+    this.focusTrapHandle = trapFocus(this.el)
   }
 
   hide(): void {
     this.hideMenu()
     const wasVisible = this.el !== null
+    this.focusTrapHandle?.release()
+    this.focusTrapHandle = null
     this.el?.remove()
     this.el = null
     this.currentCommentId = null

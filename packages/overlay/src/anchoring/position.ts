@@ -58,10 +58,32 @@ function positionFromElement(element: Element, anchor: Anchor, resolution: Resol
   }
 }
 
+/**
+ * ピンが画面の縁で切れないための余白。ピン本体と尻尾のオフセットを収める。
+ * 端の割合（0 や 1）で保存されたアンカーが viewport に落ちたとき、
+ * clamp が無いと画面外に描画されて操作できなくなる。
+ */
+const VIEWPORT_MARGIN = 40
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max)
+}
+
+/**
+ * 要素を見失ったときの最終手段。
+ *
+ * scrollX/Y を足しているので、画面上では固定位置に留まりスクロールに追従しない。
+ * 要素に紐付いたピンとは挙動が異なるが、行き先の要素が無い以上ドキュメント上の
+ * 正しい位置は復元しようがなく、推測した座標に置いて見失わせるより、
+ * 常に画面内に留めてユーザーが対処できるようにするほうを選んでいる。
+ * この挙動の違いは、ピン側の「見失った」表示と合わせて意味を持つ。
+ */
 function viewportPosition(anchor: Anchor): ResolvedPosition {
+  const maxX = Math.max(VIEWPORT_MARGIN, window.innerWidth - VIEWPORT_MARGIN)
+  const maxY = Math.max(VIEWPORT_MARGIN, window.innerHeight - VIEWPORT_MARGIN)
   return {
-    x: window.innerWidth * anchor.viewportX + window.scrollX,
-    y: window.innerHeight * anchor.viewportY + window.scrollY,
+    x: clamp(window.innerWidth * anchor.viewportX, VIEWPORT_MARGIN, maxX) + window.scrollX,
+    y: clamp(window.innerHeight * anchor.viewportY, VIEWPORT_MARGIN, maxY) + window.scrollY,
     resolution: 'viewport',
     visible: true,
   }
