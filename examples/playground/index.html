@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>handoff playground</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>handoff playground</h1>
+      <p class="lede">
+        <kbd>c</kbd> でコメントモード、<kbd>v</kbd> で閲覧、<kbd>r</kbd> でレビュー用サイドバー。
+        任意の要素をクリックするとピンが刺さる。
+      </p>
+    </header>
+
+    <main>
+      <section id="pricing">
+        <h2>アンカーの検証用</h2>
+        <p>
+          この段落や下のボタンにピンを刺してからリロードすると、位置が復元される。
+          「要素を差し替える」を押すと DOM 構造が変わり、テキストによる復元経路が使われる。
+        </p>
+        <div class="row">
+          <button id="checkout-btn" data-testid="checkout">購入手続きへ</button>
+          <button id="mutate-btn">要素を差し替える</button>
+          <button id="add-sibling-btn">兄弟要素を挿入する</button>
+        </div>
+      </section>
+
+      <section id="cards">
+        <h2>同じ構造の繰り返し</h2>
+        <p>nth-of-type だけに頼ると壊れるケース。カードを挿入してもピンがズレないこと。</p>
+        <ul class="cards">
+          <li class="card"><h3>Starter</h3><p>小さく始める</p></li>
+          <li class="card"><h3>Pro</h3><p>チームで使う</p></li>
+          <li class="card"><h3>Enterprise</h3><p>大規模に使う</p></li>
+        </ul>
+      </section>
+
+      <section id="tabs">
+        <h2>隠れている要素</h2>
+        <p>非表示のタブに刺さったピンは描画されないこと。</p>
+        <div class="tabbar">
+          <button data-tab="a" class="active">タブ A</button>
+          <button data-tab="b">タブ B</button>
+        </div>
+        <div class="panel" data-panel="a"><p>タブ A の中身</p></div>
+        <div class="panel" data-panel="b" hidden><p>タブ B の中身</p></div>
+      </section>
+
+      <section id="long">
+        <h2>スクロール追従</h2>
+        <p>下まで長い領域。スクロール中にピンがガタつかないことを見る。</p>
+        <div class="filler"></div>
+        <p id="bottom-marker">最下部のマーカー</p>
+      </section>
+    </main>
+
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

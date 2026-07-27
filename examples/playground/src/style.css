@@ -1,0 +1,127 @@
+:root {
+  color-scheme: light dark;
+  --fg: #18181b;
+  --bg: #ffffff;
+  --muted: #71717a;
+  --line: #e4e4e7;
+  --accent: #2563eb;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #f4f4f5;
+    --bg: #18181b;
+    --muted: #a1a1aa;
+    --line: #3f3f46;
+    --accent: #60a5fa;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 2rem 1.5rem 6rem;
+  max-width: 46rem;
+  margin-inline: auto;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  line-height: 1.75;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+h1 {
+  font-size: 1.75rem;
+  margin-bottom: 0.25rem;
+}
+
+h2 {
+  font-size: 1.15rem;
+  margin-top: 0;
+}
+
+.lede {
+  color: var(--muted);
+  margin-top: 0;
+}
+
+kbd {
+  font: inherit;
+  font-size: 0.85em;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 0.1em 0.4em;
+}
+
+section {
+  border-top: 1px solid var(--line);
+  padding-top: 1.5rem;
+  margin-top: 2.5rem;
+}
+
+.row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+button {
+  font: inherit;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+}
+
+#checkout-btn {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.75rem;
+  list-style: none;
+  padding: 0;
+}
+
+.card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+}
+
+.card h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.tabbar {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.tabbar .active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.filler {
+  height: 70vh;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+}
