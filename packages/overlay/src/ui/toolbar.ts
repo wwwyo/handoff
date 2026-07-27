@@ -74,6 +74,7 @@ export class Toolbar {
   private currentMode: HandoffMode = 'view'
   private commentCount = 0
   private outsideClickHandler: ((e: MouseEvent) => void) | null = null
+  private outsideClickTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(
     private parent: HTMLElement,
@@ -224,19 +225,31 @@ export class Toolbar {
     this.menu.append(changeName, clearAll, divider, this.themeToggleBtn)
     this.el.appendChild(this.menu)
 
-    this.outsideClickHandler = (e: MouseEvent) => {
+    const handler = (e: MouseEvent): void => {
       const path = e.composedPath()
       if (!path.includes(this.menu as EventTarget) && !path.includes(this.menuBtn as EventTarget)) {
         this.hideMenu()
       }
     }
-    setTimeout(() => window.addEventListener('click', this.outsideClickHandler as (e: MouseEvent) => void, true), 0)
+    this.outsideClickHandler = handler
+    // メニューを開いたクリック自身がこのハンドラに届いて即座に閉じてしまうのを避けるため、
+    // 登録を次のタスクへ回す。ローカルの handler を渡すのは、その間に hideMenu/destroy が
+    // 走ってプロパティが null になっていても登録対象を取り違えないようにするため
+    this.outsideClickTimer = setTimeout(() => {
+      this.outsideClickTimer = null
+      if (this.outsideClickHandler !== handler) return
+      window.addEventListener('click', handler, true)
+    }, 0)
   }
 
   private hideMenu(): void {
     this.menu?.remove()
     this.menu = null
     this.themeToggleBtn = null
+    if (this.outsideClickTimer !== null) {
+      clearTimeout(this.outsideClickTimer)
+      this.outsideClickTimer = null
+    }
     if (this.outsideClickHandler) {
       window.removeEventListener('click', this.outsideClickHandler, true)
       this.outsideClickHandler = null
