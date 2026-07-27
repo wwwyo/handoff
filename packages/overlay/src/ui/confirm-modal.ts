@@ -12,7 +12,17 @@ export interface ConfirmModalOptions {
 
 /** 破壊的操作(全削除など)の確認モーダル。resolve(true/false) の Promise を返す。 */
 export class ConfirmModal {
+  private closeCurrent: (() => void) | null = null
+
   constructor(private parent: HTMLElement) {}
+
+  /**
+   * ホストが handoff.destroy() を呼んだときに片付ける。
+   * NamePrompt と同じ理由(trap 解放漏れでホストの Tab が壊れる/Promise が宙に浮く)で必要。
+   */
+  destroy(): void {
+    this.closeCurrent?.()
+  }
 
   show(options: ConfirmModalOptions): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
@@ -34,8 +44,12 @@ export class ConfirmModal {
       const close = (result: boolean): void => {
         focusTrapHandle?.release()
         overlay.remove()
+        this.closeCurrent = null
         resolve(result)
       }
+
+      // destroy() から即座に片付けられるよう控えておく(キャンセル扱い)。
+      this.closeCurrent = () => close(false)
 
       const closeBtn = document.createElement('button')
       closeBtn.className = 'handoff-sidebar-icon-btn'

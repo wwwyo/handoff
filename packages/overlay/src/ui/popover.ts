@@ -43,7 +43,11 @@ export class Popover {
   }
 
   show(comment: Comment, position: { x: number; y: number }): void {
-    this.hide()
+    // silent: 別のコメントへ差し替えるための hide であり、ユーザーが「閉じた」わけではない。
+    // ここで onClose を呼ぶと、呼び出し側(HandoffLayer.closeComment)が active を null に
+    // 戻してしまい、直後に setActiveComment(id) しても打ち消され、ピン/サイドバーの
+    // ハイライトが消える(別コメントを開くたびに毎回起きる)。
+    this.hide({ silent: true })
     this.currentCommentId = comment.id
 
     this.el = document.createElement('div')
@@ -156,7 +160,12 @@ export class Popover {
     this.focusTrapHandle = trapFocus(this.el)
   }
 
-  hide(): void {
+  /**
+   * silent: true のときは onClose を発火しない。show() が別コメントへ差し替えるために
+   * 内部で呼ぶときに使う(「ユーザーが閉じた」わけではないので closeComment 相当の後処理を
+   * 起動してはいけない)。外部からの明示的な close(close ボタン・Escape 等)は既定値のまま呼ぶ。
+   */
+  hide(options: { silent?: boolean } = {}): void {
     this.hideMenu()
     const wasVisible = this.el !== null
     this.focusTrapHandle?.release()
@@ -164,7 +173,7 @@ export class Popover {
     this.el?.remove()
     this.el = null
     this.currentCommentId = null
-    if (wasVisible) this.callbacks.onClose?.()
+    if (wasVisible && !options.silent) this.callbacks.onClose?.()
   }
 
   isVisible(): boolean {

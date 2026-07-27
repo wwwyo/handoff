@@ -61,3 +61,62 @@ describe('CommentStore#add', () => {
     expect(listener).not.toHaveBeenCalled()
   })
 })
+
+describe('CommentStore#replaceAll', () => {
+  /**
+   * What: ブラウザ由来の PUT（`all` = ブラウザが知っている範囲）が、bridge の
+   * reply tool だけが積んだ返信を巻き添えで消さないことを検証する（バグ2 再現手順）。
+   */
+  it('ブラウザが把握していない bridge 側の返信を、PUT による置換後も保持する', () => {
+    const store = new CommentStore()
+    store.add(makeComment({ id: 'a' }), PAGE_URL)
+    store.add(makeComment({ id: 'b' }), PAGE_URL)
+
+    // Claude が reply tool で A に返信 → bridge 側にしか無い返信ができる
+    const claudeReply = {
+      id: 'r1',
+      author: 'claude',
+      text: '直しました',
+      createdAt: '2026-07-28T01:00:00.000Z',
+      updatedAt: '2026-07-28T01:00:00.000Z',
+    }
+    store.addReply('a', claudeReply)
+
+    // ブラウザが B を削除して、自分が知っている範囲（返信なしの A のみ）を PUT する
+    store.replaceAll(PAGE_URL, [makeComment({ id: 'a', replies: [] })])
+
+    const comments = store.list()
+    expect(comments.map((c) => c.id)).toEqual(['a'])
+    expect(comments[0]?.replies).toHaveLength(1)
+    expect(comments[0]?.replies[0]?.id).toBe('r1')
+  })
+
+  it('ブラウザが返信を認識している場合はブラウザ側の内容をそのまま使う（重複させない）', () => {
+    const store = new CommentStore()
+    store.add(makeComment({ id: 'a' }), PAGE_URL)
+    const reply = {
+      id: 'r1',
+      author: 'claude',
+      text: '直しました',
+      createdAt: '2026-07-28T01:00:00.000Z',
+      updatedAt: '2026-07-28T01:00:00.000Z',
+    }
+    store.addReply('a', reply)
+
+    // ブラウザ側が既にこの返信を認識した状態で PUT してきたケース
+    store.replaceAll(PAGE_URL, [makeComment({ id: 'a', replies: [reply] })])
+
+    const comments = store.list()
+    expect(comments[0]?.replies).toHaveLength(1)
+  })
+
+  it('他ページのコメントは巻き添えにしない', () => {
+    const store = new CommentStore()
+    store.add(makeComment({ id: 'a' }), PAGE_URL)
+    store.add(makeComment({ id: 'other' }), 'http://localhost:5173/other-page')
+
+    store.replaceAll(PAGE_URL, [])
+
+    expect(store.list().map((c) => c.id)).toEqual(['other'])
+  })
+})

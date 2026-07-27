@@ -27,6 +27,7 @@ function makeCallbacks(): PopoverCallbacks {
     onEditComment: vi.fn(),
     onEditReply: vi.fn(),
     onDeleteReply: vi.fn(),
+    onClose: vi.fn(),
   }
 }
 
@@ -87,6 +88,52 @@ describe('Popover', () => {
     const textarea = parent.querySelector('.handoff-popover-reply-area textarea') as HTMLTextAreaElement
     textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
 
+    expect(popover.isVisible()).toBe(false)
+  })
+
+  it('別のコメントに切り替えるための show() は onClose を発火しない(ハイライトが消えない)', () => {
+    parent = document.createElement('div')
+    document.body.appendChild(parent)
+    const callbacks = makeCallbacks()
+    popover = new Popover(parent, callbacks)
+
+    popover.show(makeComment({ id: 'a' }), { x: 100, y: 100 })
+    expect(callbacks.onClose).not.toHaveBeenCalled()
+
+    // A が開いた状態で B をクリックした場面を再現。show() が内部で行う「前の popover を
+    // 消す」ための hide は、ユーザーが明示的に閉じた操作ではないので onClose を呼んではいけない。
+    // 呼んでしまうと呼び出し側(HandoffLayer.closeComment)が active を null に戻し、
+    // 直後に設定し直した active を打ち消してピン/サイドバーのハイライトが消える。
+    popover.show(makeComment({ id: 'b' }), { x: 200, y: 200 })
+    expect(callbacks.onClose).not.toHaveBeenCalled()
+    expect(popover.getCurrentCommentId()).toBe('b')
+  })
+
+  it('返信のたびに再描画で show() が呼ばれても(refreshOpenComment 相当)、ハイライトは消えない', () => {
+    parent = document.createElement('div')
+    document.body.appendChild(parent)
+    const callbacks = makeCallbacks()
+    popover = new Popover(parent, callbacks)
+
+    popover.show(makeComment({ id: 'a' }), { x: 100, y: 100 })
+    // 同じコメントを開き直す(返信後の再描画は同一 id で show() し直す)。
+    popover.show(makeComment({ id: 'a', replies: [] }), { x: 100, y: 100 })
+
+    expect(callbacks.onClose).not.toHaveBeenCalled()
+    expect(popover.isVisible()).toBe(true)
+  })
+
+  it('ユーザーが close ボタンで明示的に閉じたときは onClose が発火する', () => {
+    parent = document.createElement('div')
+    document.body.appendChild(parent)
+    const callbacks = makeCallbacks()
+    popover = new Popover(parent, callbacks)
+    popover.show(makeComment(), { x: 100, y: 100 })
+
+    const closeBtn = parent.querySelector<HTMLButtonElement>('.handoff-popover-titlebar-btn[aria-label="Close comment"]')
+    closeBtn?.click()
+
+    expect(callbacks.onClose).toHaveBeenCalledTimes(1)
     expect(popover.isVisible()).toBe(false)
   })
 })

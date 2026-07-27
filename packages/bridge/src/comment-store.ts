@@ -60,10 +60,31 @@ export class CommentStore extends EventEmitter<CommentStoreEvents> {
    * `url` で送られてきたページの分だけを置き換える。他ページの分はそのまま残す
    * （bridge は複数ページ・複数タブから同時に使われ得るため、無関係なページの
    * コメントを巻き添えで消してはならない）。
+   *
+   * Why not 丸ごと差し替え: overlay は `reply` tool が bridge 側だけに積んだ
+   * 返信の存在を知らない（`Store.load()` は初回1回きりで poll は無い）。
+   * その状態でブラウザが「自分が把握している範囲の `all`」を PUT すると、
+   * 素朴に置き換えては bridge にしか無い返信が消えてしまう
+   * （例: A に Claude が返信 → ブラウザで無関係な B を削除 → PUT { comments: [A(返信なし)] }
+   * で A の返信が消える）。ブラウザからの入力は「ブラウザ側が知っている情報のみ」
+   * という前提を置き、bridge にしかない返信は id 単位で温存する。
    */
   replaceAll(url: string, comments: Comment[]): void {
+    const previousById = new Map(this.entries.filter((e) => e.url === url).map((e) => [e.comment.id, e.comment]))
     const others = this.entries.filter((e) => e.url !== url)
-    this.entries = [...others, ...comments.map((comment) => ({ comment, url }))]
+
+    const merged = comments.map((comment) => {
+      const previous = previousById.get(comment.id)
+      if (!previous) return comment
+
+      const incomingReplyIds = new Set(comment.replies.map((r) => r.id))
+      const bridgeOnlyReplies = previous.replies.filter((r) => !incomingReplyIds.has(r.id))
+      if (bridgeOnlyReplies.length === 0) return comment
+
+      return { ...comment, replies: [...comment.replies, ...bridgeOnlyReplies] }
+    })
+
+    this.entries = [...others, ...merged.map((comment) => ({ comment, url }))]
   }
 
   /**

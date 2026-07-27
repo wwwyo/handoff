@@ -27,7 +27,24 @@ function printUsageAndExit(): never {
   process.exit(1)
 }
 
-async function runServe(args: string[]): Promise<void> {
+/**
+ * `serve` 起動時の人間向けバナー行を組み立てる（副作用なし・テスト用に分離）。
+ *
+ * Why not stdout: `channel.connect()`（StdioServerTransport）以降、`process.stdout` は
+ * JSON-RPC 専用のプロトコル配線になる。クライアント（Claude Code 等）は stdout を
+ * 行単位で JSON としてパースするため、ここに人間向けのプレーンテキストを1行でも
+ * 書くとパース失敗でクライアント側が壊れる。人間向け出力は必ず stderr へ書くこと。
+ */
+export function formatServeBanner(port: number, token: string, allowedOrigins: string[]): string[] {
+  return [
+    `handoff-bridge listening on http://127.0.0.1:${port}`,
+    `token: ${token}`,
+    `allowed origins: ${allowedOrigins.join(', ')}`,
+  ]
+}
+
+/** テストから直接叩けるように export する（実プロセス起動なしに stdout/stderr 契約を検証するため）。 */
+export async function runServe(args: string[]): Promise<{ close: () => Promise<void> }> {
   let port = 4000
   const origins: string[] = []
 
@@ -54,7 +71,12 @@ async function runServe(args: string[]): Promise<void> {
     }
   }
 
-  const allowedOrigins = origins.length > 0 ? origins : ['http://localhost:*']
+  // 既定は localhost 系の任意ポート（ポート省略含む）を許可する。`127.0.0.1` /
+  // `[::1]` を含めるのは、createBridgeAdapter の既定接続先が
+  // `http://127.0.0.1:4000` であり、`127.0.0.1` で配信しているページから使う
+  // 導線が現実的なため（バグ3: 以前は `http://localhost:*` のみで両方 403 だった）。
+  const allowedOrigins =
+    origins.length > 0 ? origins : ['http://localhost:*', 'http://127.0.0.1:*', 'http://[::1]:*']
   const token = randomBytes(24).toString('hex')
   const store = new CommentStore()
 
@@ -64,9 +86,19 @@ async function runServe(args: string[]): Promise<void> {
   const channel = createChannel({ store })
   await channel.connect()
 
-  process.stdout.write(`handoff-bridge listening on http://127.0.0.1:${port}\n`)
-  process.stdout.write(`token: ${token}\n`)
-  process.stdout.write(`allowed origins: ${allowedOrigins.join(', ')}\n`)
+  // stdout はここから JSON-RPC 専用（バグ修正: 以前はここで stdout にプレーン
+  // テキストを書いており、stdio MCP クライアントのパースを壊していた）。
+  // 人間向けの起動バナー・トークンは必ず stderr へ。
+  for (const line of formatServeBanner(port, token, allowedOrigins)) {
+    process.stderr.write(`${line}\n`)
+  }
+
+  return {
+    close: async () => {
+      await channel.mcp.close()
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()))
+    },
+  }
 }
 
 async function runReport(args: string[]): Promise<void> {
@@ -106,7 +138,12 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error: unknown) => {
-  process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`)
-  process.exit(1)
-})
+// テストから `runServe`/`formatServeBanner` を import するときに実プロセス引数で
+// main() が走ってしまわないよう、直接実行されたときだけ起動する
+// （`node dist/cli.js ...` / bin 経由の実行と、テストからの import を区別する）。
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((error: unknown) => {
+    process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`)
+    process.exit(1)
+  })
+}

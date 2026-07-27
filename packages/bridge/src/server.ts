@@ -90,8 +90,10 @@ export interface ServerOptions {
   token: string
   /**
    * 許可する origin パターンの配列。`*` は 1 セグメント分のワイルドカードとして扱う
-   * （例: `http://localhost:*` はポート違いをすべて許可）。既定は呼び出し側で
-   * `http://localhost:*` を渡すこと（このモジュール自体は既定値を持たない）。
+   * （例: `http://localhost:*` はポート違いをすべて許可。末尾が `:*` の場合はポート
+   * 省略＝ポート80も許可する。`originPatternToRegExp` 参照）。既定は呼び出し側
+   * （cli.ts）で `http://localhost:*` / `http://127.0.0.1:*` / `http://[::1]:*` を
+   * 渡すこと（このモジュール自体は既定値を持たない）。
    * 単体の `*`（全 origin 許可）は指定できない。
    */
   allowedOrigins: string[]
@@ -99,8 +101,22 @@ export interface ServerOptions {
   maxBodyBytes?: number
 }
 
-/** `http://localhost:*` のような origin パターンを正規表現へ変換する。 */
+/**
+ * `http://localhost:*` のような origin パターンを正規表現へ変換する。
+ *
+ * Why not: 末尾の `:*` を素朴に「コロン + 任意文字列」として展開すると、コロンが
+ * リテラルとして残ってしまい、ポートが付かない Origin（例: port 80 の
+ * `http://localhost`）にマッチしなくなる（`^http://localhost:[^/]*$` は
+ * `http://localhost` 単体を弾く）。`:*` はポート指定のワイルドカードという
+ * 利用者の意図（README の「localhost の任意のポートのみ許可」）を汲み、
+ * 末尾が `:*` のパターンに限っては「ポートが無い場合」も許可する特別扱いにする。
+ */
 function originPatternToRegExp(pattern: string): RegExp {
+  if (pattern.endsWith(':*')) {
+    const host = pattern.slice(0, -':*'.length)
+    const escapedHost = host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    return new RegExp(`^${escapedHost}(:\\d+)?$`)
+  }
   const escaped = pattern
     .split('*')
     .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))

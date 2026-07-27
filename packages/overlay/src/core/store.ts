@@ -214,8 +214,17 @@ export class Store {
     }
   }
 
-  /** タブを閉じる直前などに、保留中の debounce を取りこぼさず flush する。 */
+  /**
+   * タブを閉じる直前などに、保留中の debounce を取りこぼさず flush する。
+   *
+   * load 完了前に呼ばれた場合、flush() を直接叩くと getComments() がまだ
+   * リモートの内容を含まない部分集合を返し、それで保存先を上書きしてしまう
+   * （adapter によっては全件 replace のため既存コメントが消える）。
+   * load 未完了なら pendingChanges は捨てずに温存し、doLoad() の finally が
+   * 呼ぶ flush() に委ねる。取りこぼしを消さず、かつ部分集合上書きも避ける。
+   */
   destroy(): void {
+    if (!this.loaded) return
     this.flush()
   }
 

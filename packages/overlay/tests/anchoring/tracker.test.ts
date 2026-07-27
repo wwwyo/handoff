@@ -120,6 +120,36 @@ describe('AnchorTracker', () => {
     querySpy.mockRestore()
   })
 
+  it('viewport フォールバックしたコメントを削除しても lastResolution に残骸を残さない（同じ id の再投入で誤った degrade/recover を emit しない）', () => {
+    document.body.innerHTML = '' // 要素が無いので resolveOne は viewport にフォールバックする
+    let comments: Comment[] = [makeComment('a')]
+    const events = new EventEmitter()
+    const degraded = vi.fn()
+    const recovered = vi.fn()
+    events.on('anchor:degraded', degraded)
+    events.on('anchor:recovered', recovered)
+    const tracker = new AnchorTracker({ getComments: () => comments }, events, () => {})
+
+    // 1回目: viewport に解決。resolvedElements には入らないが lastResolution には 'viewport' が残る
+    tracker.update()
+    expect(degraded).not.toHaveBeenCalled()
+
+    // コメントを削除する（resolvedElements には元々居ないので、forgetStaleComments が
+    // lastResolution 側も見ないと 'a' の 'viewport' が残骸として残ってしまう）
+    comments = []
+    tracker.update()
+
+    // 同じ id 'a' のコメントを import 等で復活させ、今度は要素が存在する状態にする
+    document.body.innerHTML = '<div id="a">x</div>'
+    comments = [makeComment('a')]
+    tracker.update()
+
+    // 残骸が無ければ「新規解決」として previous=undefined 扱いになり、degrade/recover は emit されない。
+    // 残骸がある実装だと previous='viewport' として比較され、誤って anchor:recovered が飛ぶ。
+    expect(degraded).not.toHaveBeenCalled()
+    expect(recovered).not.toHaveBeenCalled()
+  })
+
   it('revalidate=true でもキャッシュ要素が selector/textQuote に合致し続ける限りは解決し直さない', () => {
     document.body.innerHTML = '<div id="a">unique original text</div>'
     const comments = [makeComment('a')]

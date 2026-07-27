@@ -393,6 +393,8 @@ class HandoffLayer {
     this.sheet.destroy()
     this.sidebar.destroy()
     this.toolbar.destroy()
+    this.namePrompt.destroy()
+    this.confirmModal.destroy()
     this.toast.destroy()
     this.store.destroy()
     destroyContainer(this.container)
@@ -455,12 +457,22 @@ class HandoffLayer {
     return map
   }
 
+  /**
+   * ピン番号とサイドバー番号を同じ母集合で採番するため、renderAll には
+   * (positions に載っているかで事前 filter せず) visibleComments() をそのまま渡す。
+   *
+   * sidebar.update() にも同じ visibleComments() をフィルタ前のまま渡しており(refresh() 参照)、
+   * Sidebar.renderList は `this.comments.indexOf(comment) + 1` で採番している。
+   * ここで先に filter してしまうと PinRenderer.renderAll 内の `index + 1` は
+   * 「positions に載っている可視コメントの中で何番目か」になり、サイドバー側の
+   * 「可視コメントの中で何番目か」とズレる(selector が消えて anchorVisible = true な
+   * のに要素が visibility:hidden で位置解決だけ失敗する、といったケースで1件でも
+   * ズレが起きると以降の番号が全部ずれる)。PinRenderer.renderAll は元々 `positions.get(id)`
+   * が無いコメントを内部で読み飛ばす作りなので、事前 filter は不要かつ有害だった。
+   */
   private renderPins(): void {
     const positions = this.pinPositions()
-    this.pins.renderAll(
-      this.visibleComments().filter((c) => positions.has(c.id)),
-      positions,
-    )
+    this.pins.renderAll(this.visibleComments(), positions)
   }
 
   /** popover は viewport 座標で配置する。position: fixed の shadow content に載っているため。 */
@@ -486,13 +498,15 @@ class HandoffLayer {
     this.sidebar.setActiveComment(commentId)
 
     if (this.isMobile()) {
-      this.popover.hide()
+      // silent: これも「別のコメントを開くための hide」であり、上ですでに
+      // 設定した active を onClose 経由で打ち消されないようにする。
+      this.popover.hide({ silent: true })
       this.sheet.show(comment)
       return
     }
     const pos = this.viewportPosition(commentId)
     if (!pos) return
-    this.sheet.hide()
+    this.sheet.hide(false, true)
     this.popover.show(comment, pos)
   }
 

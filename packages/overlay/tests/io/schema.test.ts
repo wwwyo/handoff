@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { validateHandoffData } from '../../src/io/schema'
+import type { TextQuote } from '../../src/core/types'
 
 function validData() {
   return {
@@ -9,7 +10,14 @@ function validData() {
     comments: [
       {
         id: 'c1',
-        anchor: { selector: '#target', offsetX: 0.5, offsetY: 0.5, viewportX: 0.1, viewportY: 0.1 },
+        anchor: {
+          selector: '#target',
+          offsetX: 0.5,
+          offsetY: 0.5,
+          viewportX: 0.1,
+          viewportY: 0.1,
+          textQuote: undefined as TextQuote | undefined,
+        },
         author: 'yuito',
         text: 'hello',
         createdAt: '2026-01-01T00:00:00.000Z',
@@ -97,5 +105,19 @@ describe('validateHandoffData', () => {
     // @ts-expect-error 壊れた入力を意図的に作る
     data.comments[0].scope = 'invalid'
     expect(() => validateHandoffData(data)).toThrow(/invalid scope/)
+  })
+
+  it('textQuote.tagName が import で保たれる（export → import の往復で消えると findByTextQuote の絞り込みが壊れるため）', () => {
+    const data = validData()
+    data.comments[0]!.anchor.textQuote = { exact: '同じ文言', tagName: 'article' }
+    const result = validateHandoffData(data)
+    expect(result.comments[0]?.anchor.textQuote).toEqual({ exact: '同じ文言', tagName: 'article' })
+  })
+
+  it('textQuote.tagName が無い（旧形式）データはそのまま undefined として扱う', () => {
+    const data = validData()
+    data.comments[0]!.anchor.textQuote = { exact: '同じ文言' }
+    const result = validateHandoffData(data)
+    expect(result.comments[0]?.anchor.textQuote?.tagName).toBeUndefined()
   })
 })

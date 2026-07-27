@@ -7,6 +7,8 @@ const ICON_CLOSE =
 
 /** 名前入力モーダル(初回) / 変更モーダル。resolve(name | null) の Promise を返す。 */
 export class NamePrompt {
+  private closeCurrent: (() => void) | null = null
+
   constructor(private parent: HTMLElement) {}
 
   /** 初回の名前入力。ダイアログを閉じただけなら null を返す(呼び出し側で再度促す)。 */
@@ -17,6 +19,16 @@ export class NamePrompt {
   /** 既存の名前を変更する。 */
   edit(currentName: string): Promise<string | null> {
     return this.showPrompt(currentName)
+  }
+
+  /**
+   * ホストが handoff.destroy() を呼んだときに片付ける。
+   * trap を解放しないと document 上の capture keydown が残り続け、
+   * ホストページの Tab キーが恒久的に効かなくなる。開いていた Promise も
+   * 解決してしまわないと呼び出し元(await handoff.prompt() 等)が永久に止まる。
+   */
+  destroy(): void {
+    this.closeCurrent?.()
   }
 
   private showPrompt(prefill: string): Promise<string | null> {
@@ -47,25 +59,31 @@ export class NamePrompt {
 
       let focusTrapHandle: FocusTrapHandle | undefined
 
-      const closePrompt = (nameToResolve: string | null = null, isSwipe = false): void => {
-        const finish = (): void => {
-          focusTrapHandle?.release()
-          overlay.remove()
-          if (mobile && !this.parent.querySelector('.handoff-sheet')) {
-            document.body.style.overflow = ''
-            document.documentElement.style.overflow = ''
-          }
-          resolve(nameToResolve)
+      const finish = (nameToResolve: string | null): void => {
+        focusTrapHandle?.release()
+        overlay.remove()
+        if (mobile && !this.parent.querySelector('.handoff-sheet')) {
+          document.body.style.overflow = ''
+          document.documentElement.style.overflow = ''
         }
+        this.closeCurrent = null
+        resolve(nameToResolve)
+      }
 
+      const closePrompt = (nameToResolve: string | null = null, isSwipe = false): void => {
         if (mobile) {
           if (!isSwipe) modal.classList.add('handoff-sheet-closing')
           overlay.classList.add('handoff-sheet-closing')
-          setTimeout(finish, 220)
+          setTimeout(() => finish(nameToResolve), 220)
         } else {
-          finish()
+          finish(nameToResolve)
         }
       }
+
+      // destroy() から即座に片付けられるよう、閉じるアニメーション(220ms の setTimeout)を
+      // 待たない版を控えておく。ホストが destroy() する場面は SPA のルート遷移等であり、
+      // アニメーション完了を待っている間 trap が document 上に残ってしまうのを避けたい。
+      this.closeCurrent = () => finish(null)
 
       if (mobile && handle) {
         addSwipeToDismiss(handle, modal, (isSwipe) => closePrompt(null, isSwipe))

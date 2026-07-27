@@ -87,3 +87,78 @@ describe('trapFocus', () => {
     outside.remove()
   })
 })
+
+describe('trapFocus のスタック(複数の trap が同時に生きている場合)', () => {
+  let outer: HTMLDivElement
+  let inner: HTMLDivElement
+  let releaseOuter: (() => void) | undefined
+  let releaseInner: (() => void) | undefined
+
+  function makeModal(label: string): { el: HTMLDivElement; first: HTMLButtonElement; second: HTMLButtonElement } {
+    const el = document.createElement('div')
+    const first = document.createElement('button')
+    first.textContent = `${label}-first`
+    const second = document.createElement('button')
+    second.textContent = `${label}-second`
+    el.append(first, second)
+    document.body.appendChild(el)
+    return { el, first, second }
+  }
+
+  afterEach(() => {
+    releaseInner?.()
+    releaseOuter?.()
+    releaseInner = undefined
+    releaseOuter = undefined
+    outer?.remove()
+    inner?.remove()
+  })
+
+  it('review モードの sidebar + popover の2枚が同時に生きていると、popover の先頭から Tab しても2番目へ進めず先頭に固定される(修正前の再現)', () => {
+    // 再現手順: 1枚目(sidebar 相当) を先に開き、2枚目(popover 相当)を後から開く。
+    const outerModal = makeModal('sidebar')
+    outer = outerModal.el
+    releaseOuter = trapFocus(outer).release
+
+    const innerModal = makeModal('popover')
+    inner = innerModal.el
+    releaseInner = trapFocus(inner).release
+
+    // popover 内の先頭ボタンにフォーカスがある状態(show() 直後相当)で Tab を押す。
+    // 先頭 → 2番目へ普通に進むはずの操作。
+    innerModal.first.focus()
+    const event = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    innerModal.first.dispatchEvent(event)
+
+    // 最前面(popover)の trap だけが働くべきなので、先頭ボタンからの通常 Tab は
+    // ラップ処理の対象外(preventDefault しない = ブラウザの既定移動に任せる)。
+    // 修正前は sidebar の trap が「active が sidebar の外にある」と誤判定して
+    // 割り込み、popover 側も追随して自分の先頭へ focus() し直すため、
+    // 何度 Tab を押しても先頭ボタンに固定されて2番目以降へ進めなかった。
+    expect(event.defaultPrevented).toBe(false)
+    expect(document.activeElement).toBe(innerModal.first)
+  })
+
+  it('最前面の trap を release すると、1つ前の trap が有効に戻る', () => {
+    const outerModal = makeModal('sidebar')
+    outer = outerModal.el
+    releaseOuter = trapFocus(outer).release
+
+    const innerModal = makeModal('popover')
+    inner = innerModal.el
+    const innerHandle = trapFocus(inner)
+    releaseInner = innerHandle.release
+
+    // popover(inner)を閉じる — sidebar(outer)だけが残る。
+    innerHandle.release()
+    releaseInner = undefined
+
+    outerModal.second.focus()
+    const event = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    outerModal.second.dispatchEvent(event)
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(outer.contains(document.activeElement)).toBe(true)
+    expect(document.activeElement).toBe(outerModal.first)
+  })
+})

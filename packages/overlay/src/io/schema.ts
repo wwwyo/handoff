@@ -54,16 +54,26 @@ function normalizeAnchor(anchor: unknown, commentId: string): Anchor {
   }
 }
 
+/**
+ * TextQuote のフィールドごとの検証ルール。ここに追加すれば normalizeTextQuote の
+ * 返り値にも自動で反映される（新フィールドを足したときに転記し忘れて落とす、
+ * という今回のバグの再発を防ぐための書き方）。ただし検証自体は個別に書く必要があり、
+ * 未知フィールドを無条件に通すわけではない。
+ */
+const TEXT_QUOTE_STRING_FIELDS: readonly (keyof Omit<TextQuote, 'exact'>)[] = ['prefix', 'suffix', 'tagName']
+
 function normalizeTextQuote(value: unknown): TextQuote | undefined {
   if (!value || typeof value !== 'object') return undefined
   const q = value as Record<string, unknown>
   if (typeof q.exact !== 'string') return undefined
 
-  return {
-    exact: q.exact,
-    prefix: typeof q.prefix === 'string' ? q.prefix : undefined,
-    suffix: typeof q.suffix === 'string' ? q.suffix : undefined,
+  const result: TextQuote = { exact: q.exact }
+  for (const field of TEXT_QUOTE_STRING_FIELDS) {
+    if (typeof q[field] === 'string') {
+      result[field] = q[field] as string
+    }
   }
+  return result
 }
 
 function normalizeComment(comment: unknown, now: string): Comment {

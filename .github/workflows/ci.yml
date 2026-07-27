@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# action は tag ではなく commit SHA で固定する。tag は付け替えられるため、
+# 固定しないと third-party action の乗っ取りがそのまま CI 実行権限になる
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      # mise.toml の pin をそのまま使う。ここで node/pnpm のバージョンを
+      # 書き直すと、ローカルと CI で暗黙に食い違う
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        with:
+          version: 2026.7.7
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm typecheck
+
+      - run: pnpm test
+
+      # dist が壊れていないことまで見る。overlay は d.ts の生成が
+      # tsconfig の rootDir 設定に依存していて壊れやすい
+      - run: pnpm build

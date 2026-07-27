@@ -167,7 +167,12 @@ export class AnchorTracker {
 
   private forgetStaleComments(comments: Comment[]): void {
     const currentIds = new Set(comments.map((c) => c.id))
-    for (const id of this.resolvedElements.keys()) {
+    // resolvedElements と lastResolution は別々に書き込まれる（viewport フォールバック時は
+    // resolvedElements からは delete される一方 lastResolution には残る）ため、
+    // 両方の key 集合を合わせて走査しないと viewport 落ちしたコメントの lastResolution が
+    // 消えたコメント一覧から漏れて残り続ける。
+    const staleIds = new Set([...this.resolvedElements.keys(), ...this.lastResolution.keys()])
+    for (const id of staleIds) {
       if (!currentIds.has(id)) {
         this.resolvedElements.delete(id)
         this.lastResolution.delete(id)

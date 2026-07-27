@@ -103,6 +103,30 @@ describe('Store', () => {
     expect(saveCalls.length).toBe(1)
   })
 
+  it('load 飛行中に destroy() しても、リモートを含まない部分集合で上書きしない', async () => {
+    const { adapter, saveCalls, resolveLoad } = makeAdapter()
+    const store = new Store(new EventEmitter(), { adapter, persistDebounceMs: 300 })
+
+    const loadDone = store.load()
+    // load が返る前にローカルで1件追加する（schedulePersist は !loaded で return するため
+    // まだ save はスケジュールされていない）
+    store.addComment(makeComment('local'))
+    expect(saveCalls.length).toBe(0)
+
+    // ホストがまだ load 未完了のうちに destroy する
+    store.destroy()
+    // flush() の不変条件（load 完了前は保存しない）を迂回してはいけない
+    expect(saveCalls.length).toBe(0)
+
+    // load が返ってきたら doLoad() の finally が取りこぼしなく flush する
+    resolveLoad([makeComment('remote')])
+    await loadDone
+
+    expect(saveCalls.length).toBe(1)
+    // all は local と remote の両方を含む。remote を欠いた部分集合で上書きされていない
+    expect(saveCalls[0]?.all.map((c) => c.id).sort()).toEqual(['local', 'remote'])
+  })
+
   it('storage:error イベントを握り潰さず emit する', async () => {
     const events = new EventEmitter()
     const errors: unknown[] = []

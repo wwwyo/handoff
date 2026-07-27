@@ -16,7 +16,7 @@ overlay 上で書かれたコメントを受け取り、実行中の Claude Code
 | `PUT /comments` | `{ comments: Comment[], url: string }`（`url` に一致するページの分だけを置換） | `{ ok: true }` |
 | `GET /comments?url=<encoded>` | （query の `url` は省略可。省略時は全ページの全件） | `{ comments: Comment[] }` |
 2. overlay から新規コメントが届く（`POST /comments`）と、channel が `notifications/claude/channel` を送り、実行中の Claude Code セッションのコンテキストへそのまま流し込む。Claude 側の tool 呼び出しは不要
-3. Claude が `reply` tool を呼ぶと、返信が bridge のコメントストアに積まれ、overlay 側は通常の poll（`GET /comments`）でそれを受け取る
+3. Claude が `reply` tool を呼ぶと、返信が bridge のコメントストアに積まれる。**overlay 側に poll は実装されていない**（`Store.load()` は起動時に1回きり）ため、Claude の返信をブラウザに反映させるには現状ホスト側で再読込（`handoff.refresh()` 相当）が必要
 
 ```
 overlay (browser) --HTTP(Bearer token)--> bridge --stdio(MCP notification)--> Claude Code session
@@ -35,7 +35,7 @@ pnpm --filter @wwwyo/handoff-bridge build
 handoff-bridge serve --port 4000 --origin http://localhost:5173
 ```
 
-起動すると共有トークンが標準出力に一度だけ表示される。overlay 側の `StorageAdapter` は `Authorization: Bearer <token>` を付けて `GET/PUT/POST /comments` を呼ぶ。
+起動すると共有トークンが**標準エラー出力**に一度だけ表示される。`serve` は stdio MCP サーバ（channel）を同一プロセスで兼ねるため、`channel.connect()` 以降 stdout は JSON-RPC 専用の配線になる。人間向けのバナー・トークンをここに書くとプロトコルを壊すので、必ず stderr に出す（`.mcp.json` からの起動でも stderr はターミナルに透過するので、実運用でトークンを見失うことはない）。overlay 側の `StorageAdapter` は `Authorization: Bearer <token>` を付けて `GET/PUT/POST /comments` を呼ぶ。
 
 ```
 handoff-bridge listening on http://127.0.0.1:4000
@@ -43,7 +43,7 @@ token: <ランダムな hex 文字列>
 allowed origins: http://localhost:5173
 ```
 
-`--origin` は複数指定できる（既定は `http://localhost:*` = localhost の任意のポートのみ許可。ワイルドカード全許可はしない）。
+`--origin` は複数指定できる（既定は `http://localhost:*` / `http://127.0.0.1:*` / `http://[::1]:*` = localhost 系ホストの任意のポート・ポート省略（80番）を許可。ワイルドカード全許可はしない）。
 
 ## Claude Code から接続する
 

@@ -32,7 +32,9 @@ export class BottomSheet {
   }
 
   show(comment: Comment): void {
-    this.hide(false)
+    // silent: 別のコメントへ差し替えるための hide。ユーザーが閉じたわけではないので
+    // onClose(closeComment → active クリア)を起動してはいけない(popover.show()と同じ理由)。
+    this.hide(false, true)
     this.currentCommentId = comment.id
     document.body.style.overflow = 'hidden'
     document.documentElement.style.overflow = 'hidden'
@@ -158,7 +160,12 @@ export class BottomSheet {
     this.focusTrapHandle = trapFocus(this.el)
   }
 
-  hide(isSwipe = false): void {
+  /**
+   * silent: true のときは onClose を発火しない。show() が別のコメントへ差し替えるために
+   * 内部で呼ぶときに使う(popover と同じ理由。「ユーザーが閉じた」わけではないので
+   * closeComment 相当の後処理を起動してはいけない)。
+   */
+  hide(isSwipe = false, silent = false): void {
     if (!this.el) return
     const el = this.el
     const scrim = this.scrim
@@ -168,7 +175,7 @@ export class BottomSheet {
     this.focusTrapHandle?.release()
     this.focusTrapHandle = null
 
-    this.callbacks.onClose?.()
+    if (!silent) this.callbacks.onClose?.()
 
     if (!isSwipe) el.classList.add('handoff-sheet-closing')
     scrim?.classList.add('handoff-sheet-closing')
@@ -199,6 +206,13 @@ export class BottomSheet {
     this.scrim?.remove()
     this.el = null
     this.scrim = null
+    this.currentCommentId = null
+    // show() で hidden にした body/documentElement の overflow を戻す。
+    // hide() は 220ms のアニメーション後に戻すが、destroy() は即座に消すので同じ経路を通らない。
+    if (!this.parent.querySelector('.handoff-sheet-scrim, .handoff-sheet')) {
+      document.body.style.overflow = ''
+      document.documentElement.style.overflow = ''
+    }
   }
 
   private toggleMenu(commentId: string, anchor: HTMLElement): void {

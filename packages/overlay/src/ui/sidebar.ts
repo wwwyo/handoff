@@ -168,7 +168,10 @@ export class Sidebar {
     this.viewportCleanup = null
     this.focusTrapHandle?.release()
     this.focusTrapHandle = null
-    this.scrim?.remove()
+    // scrim.remove() / el.remove() を直接やるだけだと applyPresentation() が
+    // モバイルで hidden にした body/documentElement の overflow が戻らない。
+    // Composer/BottomSheet と同じく teardownSheet() 経由で復元する。
+    this.teardownSheet()
     this.el.remove()
   }
 

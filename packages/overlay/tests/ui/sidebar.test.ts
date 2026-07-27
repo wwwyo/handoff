@@ -59,6 +59,23 @@ describe('Sidebar', () => {
     expect(parent.querySelector('.handoff-sheet-scrim')).toBeNull()
   })
 
+  it('モバイル幅でシート表示中に destroy() すると、ホストページの overflow ロックが解除される', () => {
+    mockViewport(390, true)
+    sidebar = new Sidebar(parent, { onCommentClick: vi.fn() })
+    sidebar.setVisible(true)
+
+    // applyPresentation() がモバイルで body/documentElement を hidden にする。
+    expect(document.body.style.overflow).toBe('hidden')
+    expect(document.documentElement.style.overflow).toBe('hidden')
+
+    // 修正前は destroy() が teardownSheet() を経由せず scrim.remove()/el.remove() を
+    // 直接呼ぶだけだったため、ここで overflow が hidden のまま残っていた。
+    sidebar.destroy()
+
+    expect(document.body.style.overflow).toBe('')
+    expect(document.documentElement.style.overflow).toBe('')
+  })
+
   it('review 表示中は Tab で外へ抜けない(focus trap がかかっている)', () => {
     mockViewport(1280, false)
     const onCommentClick = vi.fn()

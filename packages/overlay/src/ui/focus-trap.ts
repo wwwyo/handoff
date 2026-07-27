@@ -9,6 +9,21 @@ export interface FocusTrapHandle {
   release: () => void
 }
 
+/**
+ * 生きている trap を登録順に積んだスタック。
+ *
+ * document の capture phase に複数の trap が同時に登録されると、Tab が来るたびに
+ * "登録順" で全員が処理されてしまう(sidebar → popover の順で先頭へ focus() し直す、等)。
+ * 実際にキー処理をしてよいのはスタック最上段(最後に開いた/最前面のモーダル)だけにする。
+ * document への keydown リスナー自体は 1 個だけ張り、スタックの先頭を都度引いて委譲する。
+ */
+const trapStack: Array<(e: KeyboardEvent) => void> = []
+
+function dispatchToTop(e: KeyboardEvent): void {
+  const top = trapStack[trapStack.length - 1]
+  top?.(e)
+}
+
 const FOCUSABLE_SELECTOR = [
   'a[href]',
   'button:not([disabled])',
@@ -70,11 +85,18 @@ export function trapFocus(container: HTMLElement): FocusTrapHandle {
     }
   }
 
-  document.addEventListener('keydown', onKeydown, true)
+  if (trapStack.length === 0) {
+    document.addEventListener('keydown', dispatchToTop, true)
+  }
+  trapStack.push(onKeydown)
 
   return {
     release: (): void => {
-      document.removeEventListener('keydown', onKeydown, true)
+      const idx = trapStack.indexOf(onKeydown)
+      if (idx !== -1) trapStack.splice(idx, 1)
+      if (trapStack.length === 0) {
+        document.removeEventListener('keydown', dispatchToTop, true)
+      }
     },
   }
 }

@@ -86,6 +86,21 @@ describe('server', () => {
     expect(res.headers.get('access-control-allow-origin')).toBe('http://localhost:5173')
   })
 
+  /**
+   * What: バグ3の再現。`http://localhost:*` パターンが末尾コロンをリテラル扱いして
+   * ポート省略（80番）の Origin を弾いていた不具合の固定化。
+   */
+  it('ポート省略の origin (http://localhost) も http://localhost:* に一致して通る', async () => {
+    const res = await fetch(`${baseUrl}/comments`, {
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        Origin: 'http://localhost',
+      },
+    })
+    expect(res.status).toBe(200)
+    expect(res.headers.get('access-control-allow-origin')).toBe('http://localhost')
+  })
+
   it('POST → GET の往復でコメントが積まれて読める', async () => {
     const comment = makeComment()
 
@@ -206,6 +221,47 @@ describe('server', () => {
   it('allowedOrigins に "*" 単体を渡すと createServer が起動時に例外を投げる', () => {
     const store = new CommentStore()
     expect(() => createServer({ store, token: TOKEN, allowedOrigins: ['*'] })).toThrow()
+  })
+})
+
+describe('server (default localhost-family origins)', () => {
+  /**
+   * What: cli.ts の既定 allowedOrigins（`http://localhost:*` / `http://127.0.0.1:*` /
+   * `http://[::1]:*`）が意図通りのパターン展開になっていることを固定する
+   * （バグ3: 以前は `http://localhost:*` のみで 127.0.0.1 / [::1] / ポート省略が漏れていた）。
+   */
+  let httpServer: Server
+  let baseUrl: string
+
+  beforeEach(async () => {
+    const store = new CommentStore()
+    httpServer = createServer({
+      store,
+      token: TOKEN,
+      allowedOrigins: ['http://localhost:*', 'http://127.0.0.1:*', 'http://[::1]:*'],
+    })
+    await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
+    const { port } = httpServer.address() as AddressInfo
+    baseUrl = `http://127.0.0.1:${port}`
+  })
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()))
+  })
+
+  it.each([
+    ['http://localhost', 200],
+    ['http://localhost:5173', 200],
+    ['http://127.0.0.1:5173', 200],
+    ['http://127.0.0.1', 200],
+    ['http://[::1]:5173', 200],
+    ['http://[::1]', 200],
+    ['http://evil.com', 403],
+  ])('%s -> %i', async (origin, expectedStatus) => {
+    const res = await fetch(`${baseUrl}/comments`, {
+      headers: { Authorization: `Bearer ${TOKEN}`, Origin: origin },
+    })
+    expect(res.status).toBe(expectedStatus)
   })
 })
 
