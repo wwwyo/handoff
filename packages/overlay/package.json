@@ -1,0 +1,24 @@
+{
+  "name": "@wwwyo/handoff",
+  "version": "0.1.0",
+  "description": "Drop pins on any web page, leave threaded comments, and hand them off to an AI coding session.",
+  "type": "module",
+  "main": "./dist/handoff.umd.cjs",
+  "module": "./dist/handoff.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/handoff.js",
+      "require": "./dist/handoff.umd.cjs"
+    },
+    "./style.css": "./dist/handoff.css"
+  },
+  "files": ["dist", "LICENSE", "README.md"],
+  "scripts": {
+    "build": "vite build && tsc --emitDeclarationOnly -p tsconfig.build.json"
+  },
+  "keywords": ["comments", "annotation", "overlay", "review", "feedback", "claude", "ai"],
+  "license": "MIT",
+  "sideEffects": ["*.css"]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@wwwyo/handoff-bridge",
+  "version": "0.1.0",
+  "description": "Local bridge that receives handoff comments from the browser and pushes them into a running Claude Code session.",
+  "type": "module",
+  "bin": {
+    "handoff-bridge": "./dist/cli.js"
+  },
+  "files": ["dist", "LICENSE", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "license": "MIT"
+}

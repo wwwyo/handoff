@@ -1,0 +1,8 @@
+packages:
+  - 'packages/*'
+  - 'examples/*'
+
+# supply chain 対策。pnpm 10 以降、これらの設定は .npmrc ではなくここで解決される
+saveExact: true
+# 公開後 7 日 (10080 分) 経過したバージョンのみ解決対象にする
+minimumReleaseAge: 10080

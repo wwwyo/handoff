@@ -1,0 +1,19 @@
+node_modules/
+dist/
+coverage/
+.DS_Store
+.env
+.env.local
+*.log
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+
+# エージェント作業用（PRD・design doc・実装計画）
+.agent/
+
+# 社外秘・個人秘
+*.local.*
