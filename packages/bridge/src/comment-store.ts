@@ -1,11 +1,12 @@
 /**
- * server.ts (HTTP) と channel.ts (MCP) が共有するインメモリのコメントキュー。
+ * server.ts (HTTP) と channel.ts (MCP) が共有するインメモリのコメントストア。
  *
- * overlay の StorageAdapter は `{ load(), save(changes, all) }` のみの契約なので、
- * HTTP 経由の GET/PUT がそのまま load/save の実装になる。POST は id による upsert で、
- * 「未知の id が来たときだけ channel へ通知する」ための専用エンドポイントとして分離している
- * （save は差分 or 全件を問わず何度でも呼べる冪等な置換だが、通知は新規コメント検知の
- * ための一度きりのイベントなので同じ経路に載せない）。
+ * リソース単位の CRUD（`add` = 作成専用 / `update` = 部分更新 / `delete`）を提供する。
+ * 以前は overlay の `StorageAdapter#save(changes, all)` に合わせて `add` を
+ * id-upsert、`replaceAll` を全件置換として実装していたが、全件置換は
+ * 「2 人が同じページを開いていると片方の削除がもう片方の新規コメントを消す」
+ * （last-writer-wins）不具合の温床だったため、`replaceAll` ごと削除した。
+ * 詳細は `.agent/design/remote-handoff.md`「API」節を参照。
  *
  * ページ URL は `Comment` 型に持たせない（overlay の adapter 契約: コメントは
  * ページをまたいで export/import され得るので、URL は保存先との通信の文脈に
@@ -20,8 +21,11 @@ export interface StoredComment {
   url: string
 }
 
+/** PATCH で受け付けるフィールド。`replies` を含めないのは comment-store.ts 冒頭 / server.ts 参照。 */
+export type CommentPatch = Partial<Pick<Comment, 'text' | 'anchor' | 'scope' | 'resolved' | 'resolvedBy'>>
+
 export type CommentStoreEvents = {
-  /** POST /comments で「id が未知のコメント」が届いたときに一度だけ発火する。 */
+  /** POST /comments で新規コメントが作成されたときに一度だけ発火する。 */
   added: [comment: Comment, url: string]
 }
 
@@ -35,66 +39,50 @@ export class CommentStore extends EventEmitter<CommentStoreEvents> {
   }
 
   /**
-   * POST /comments: id による upsert。
+   * POST /comments: 作成専用。既存 id なら false を返して呼び出し側（server.ts）が
+   * 409 に変換する。
    *
-   * Why not: overlay の StoreChange#upsert は新規追加専用ではなく、編集・返信追加・
-   * 解決/再開・既読変更のすべてで発生する（packages/overlay/src/core/store.ts の
-   * queueChange 呼び出し箇所を参照）。ここを単純な push にすると、同じコメントを
-   * 編集するたびに配列へ重複登録され、GET /comments が重複を返す。
-   * さらに channel への通知（'added' イベント）は「本当に新規の指摘」のときだけに
-   * 絞る必要がある。既存 id の更新まで通知すると、編集や既読変更が
-   * 「新しい指摘が来た」として Claude の channel を埋めてしまう。
+   * Why not upsert: 以前は同一 id の再送を「編集」として受け入れていたが、
+   * それだと真の作成と更新の区別が呼び出し側に伝わらず、PATCH/DELETE を
+   * 導入する意味が無くなる。作成と更新を型（POST vs PATCH）で分けるのが
+   * リソース単位 API の前提。
    */
-  add(comment: Comment, url: string): void {
-    const index = this.entries.findIndex((e) => e.comment.id === comment.id)
-    if (index === -1) {
-      this.entries.push({ comment, url })
-      this.emit('added', comment, url)
-      return
-    }
-    this.entries[index] = { comment, url }
+  add(comment: Comment, url: string): boolean {
+    const exists = this.entries.some((e) => e.comment.id === comment.id)
+    if (exists) return false
+    this.entries.push({ comment, url })
+    this.emit('added', comment, url)
+    return true
   }
 
   /**
-   * PUT /comments: overlay の StorageAdapter#save 相当の全件置換。
-   * `url` で送られてきたページの分だけを置き換える。他ページの分はそのまま残す
-   * （bridge は複数ページ・複数タブから同時に使われ得るため、無関係なページの
-   * コメントを巻き添えで消してはならない）。
-   *
-   * Why not 丸ごと差し替え: overlay は `reply` tool が bridge 側だけに積んだ
-   * 返信の存在を知らない（`Store.load()` は初回1回きりで poll は無い）。
-   * その状態でブラウザが「自分が把握している範囲の `all`」を PUT すると、
-   * 素朴に置き換えては bridge にしか無い返信が消えてしまう
-   * （例: A に Claude が返信 → ブラウザで無関係な B を削除 → PUT { comments: [A(返信なし)] }
-   * で A の返信が消える）。ブラウザからの入力は「ブラウザ側が知っている情報のみ」
-   * という前提を置き、bridge にしかない返信は id 単位で温存する。
+   * PATCH /comments/:id: 許可されたフィールドだけを部分更新する。
+   * `updatedAt` はクライアントから受け取らず、ここでサーバ側の現在時刻に更新する
+   * （PATCH body には含まれないフィールドのため）。
    */
-  replaceAll(url: string, comments: Comment[]): void {
-    const previousById = new Map(this.entries.filter((e) => e.url === url).map((e) => [e.comment.id, e.comment]))
-    const others = this.entries.filter((e) => e.url !== url)
+  update(id: string, patch: CommentPatch): Comment | null {
+    const entry = this.entries.find((e) => e.comment.id === id)
+    if (!entry) return null
+    entry.comment = { ...entry.comment, ...patch, updatedAt: new Date().toISOString() }
+    return entry.comment
+  }
 
-    const merged = comments.map((comment) => {
-      const previous = previousById.get(comment.id)
-      if (!previous) return comment
-
-      const incomingReplyIds = new Set(comment.replies.map((r) => r.id))
-      const bridgeOnlyReplies = previous.replies.filter((r) => !incomingReplyIds.has(r.id))
-      if (bridgeOnlyReplies.length === 0) return comment
-
-      return { ...comment, replies: [...comment.replies, ...bridgeOnlyReplies] }
-    })
-
-    this.entries = [...others, ...merged.map((comment) => ({ comment, url }))]
+  /** DELETE /comments/:id。存在しなければ false を返し、呼び出し側が 404 に変換する。 */
+  delete(id: string): boolean {
+    const index = this.entries.findIndex((e) => e.comment.id === id)
+    if (index === -1) return false
+    this.entries.splice(index, 1)
+    return true
   }
 
   /**
-   * channel の reply tool から呼ばれる。該当コメントに返信を積む。
-   * 該当 id が無ければ何もしない（Claude 側の入力ミスで例外を投げない）。
+   * POST /comments/:id/replies。channel の reply tool と、ブラウザからの返信投稿の
+   * 双方から呼ばれる。該当 id が無ければ null を返す（Claude 側の入力ミスで例外を投げない）。
    * comment_id はページを問わずグローバルに一意という前提で全 entries から探す。
    */
-  addReply(commentId: string, reply: Reply): Comment | undefined {
+  addReply(commentId: string, reply: Reply): Comment | null {
     const entry = this.entries.find((e) => e.comment.id === commentId)
-    if (!entry) return undefined
+    if (!entry) return null
     entry.comment.replies.push(reply)
     entry.comment.updatedAt = reply.createdAt
     return entry.comment

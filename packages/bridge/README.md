@@ -5,16 +5,21 @@ overlay 上で書かれたコメントを受け取り、実行中の Claude Code
 ## これは何をするか
 
 1. `handoff-bridge serve` が同一プロセス内で 2 つを起動する
-   - `127.0.0.1` にのみ bind する HTTP サーバ（overlay の `StorageAdapter` の実装先。`GET /comments` = load、`PUT /comments` = save、`POST /comments` = 新規コメントの即時通知）
+   - `127.0.0.1` にのみ bind する HTTP サーバ（overlay の `StorageAdapter` の実装先。リソース単位の `POST`/`PATCH`/`DELETE`/`GET` で構成する）
    - Claude Code の **channel**（[research preview](https://code.claude.com/docs/en/channels.md)）として動く stdio MCP サーバ
 
 コメントはページをまたいで export/import され得るため、**ページ URL は `Comment` 型に持たせず、リクエストの文脈として別送りする**（overlay 側の adapter: `packages/overlay/src/adapters/bridge.ts`）。そのため各エンドポイントの body/query は次の形をとる:
 
 | エンドポイント | リクエスト | レスポンス |
 | --- | --- | --- |
-| `POST /comments` | `{ comment: Comment, url: string }` | `{ ok: true }` |
-| `PUT /comments` | `{ comments: Comment[], url: string }`（`url` に一致するページの分だけを置換） | `{ ok: true }` |
+| `POST /comments` | `{ comment: Comment, url: string }`。**作成専用**。既存 id は 409 | `201 { ok: true }` / `409` |
+| `PATCH /comments/:id` | `{ patch: CommentPatch, url: string }`（`patch` は `text`/`anchor`/`scope`/`resolved`/`resolvedBy` のみ。`replies` は 400） | `200 { comment: Comment }` |
+| `DELETE /comments/:id` | — | `204` |
+| `POST /comments/:id/replies` | `{ reply: Reply }` | `201 { comment: Comment }` |
 | `GET /comments?url=<encoded>` | （query の `url` は省略可。省略時は全ページの全件） | `{ comments: Comment[] }` |
+
+`PUT /comments`（全件差し替え）は廃止した。2 人が同じページを開いていると、片方の削除がもう片方の新規コメントを消す（last-writer-wins）ため。同じ理由で `PATCH` は `replies` を受け付けない — ブラウザが把握している `replies` 全体で上書きすると、Claude が `reply` tool で積んだ返信が消える。返信は必ず `POST /comments/:id/replies` を通す（詳細は `.agent/design/remote-handoff.md`「API」節）。
+
 2. overlay から新規コメントが届く（`POST /comments`）と、channel が `notifications/claude/channel` を送り、実行中の Claude Code セッションのコンテキストへそのまま流し込む。Claude 側の tool 呼び出しは不要
 3. Claude が `reply` tool を呼ぶと、返信が bridge のコメントストアに積まれる。**overlay 側に poll は実装されていない**（`Store.load()` は起動時に1回きり）ため、Claude の返信をブラウザに反映させるには現状ホスト側で再読込（`handoff.refresh()` 相当）が必要
 
@@ -35,7 +40,7 @@ pnpm --filter @wwwyo/handoff-bridge build
 handoff-bridge serve --port 4000 --origin http://localhost:5173
 ```
 
-起動すると共有トークンが**標準エラー出力**に一度だけ表示される。`serve` は stdio MCP サーバ（channel）を同一プロセスで兼ねるため、`channel.connect()` 以降 stdout は JSON-RPC 専用の配線になる。人間向けのバナー・トークンをここに書くとプロトコルを壊すので、必ず stderr に出す（`.mcp.json` からの起動でも stderr はターミナルに透過するので、実運用でトークンを見失うことはない）。overlay 側の `StorageAdapter` は `Authorization: Bearer <token>` を付けて `GET/PUT/POST /comments` を呼ぶ。
+起動すると共有トークンが**標準エラー出力**に一度だけ表示される。`serve` は stdio MCP サーバ（channel）を同一プロセスで兼ねるため、`channel.connect()` 以降 stdout は JSON-RPC 専用の配線になる。人間向けのバナー・トークンをここに書くとプロトコルを壊すので、必ず stderr に出す（`.mcp.json` からの起動でも stderr はターミナルに透過するので、実運用でトークンを見失うことはない）。overlay 側の `StorageAdapter` は `Authorization: Bearer <token>` を付けて `GET`/`POST`/`PATCH`/`DELETE` の各エンドポイントを呼ぶ。
 
 ```
 handoff-bridge listening on http://127.0.0.1:4000
@@ -108,4 +113,4 @@ handoff-bridge report ./comments.json -o report.md
 - 確認できた: `capabilities.experimental['claude/channel']: {}` の宣言、`notifications/claude/channel` の method 名とパラメータ形状（`content: string`, `meta: Record<string,string>`、`meta` のキーは識別子のみでハイフン等は無視される）、reply tool の一般的な組み方（`capabilities.tools: {}` + 標準 MCP tool）、`--dangerously-load-development-channels` と `server:<name>` / `plugin:<name>@<marketplace>` の指定形式、`--channels` との違い（allowlist 済みプラグイン専用）、enterprise の `channelsEnabled` / `allowedChannelPlugins` の存在
 - 確認できなかった（＝このリポジトリ側の設計判断で埋めた箇所）: bridge のような「HTTPサーバ + channel」を1プロセスに同居させる構成そのもの（ドキュメントの例は webhook 単体）
 
-なお `page_url` の扱いは overlay 側と合意済み: `Comment` 型は変更せず、POST/PUT のリクエスト body に載る `url` フィールドから取得する（上記の body/query 表を参照。`packages/bridge/src/comment-store.ts` が `{ comment, url }` の組で保持し、`channel.ts` の `buildCommentNotification(comment, url)` が `meta.page_url` に載せる）。
+なお `page_url` の扱いは overlay 側と合意済み: `Comment` 型は変更せず、POST/PATCH のリクエスト body に載る `url` フィールドから取得する（上記の body/query 表を参照。`packages/bridge/src/comment-store.ts` が `{ comment, url }` の組で保持し、`channel.ts` の `buildCommentNotification(comment, url)` が `meta.page_url` に載せる）。

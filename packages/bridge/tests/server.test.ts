@@ -1,5 +1,5 @@
 /**
- * What: 認証・CORS・POST→GET 往復という server.ts の契約を検証する。
+ * What: 認証・CORS・リソース単位 API（POST/PATCH/DELETE/replies）の契約を検証する。
  */
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import type { AddressInfo } from 'node:net'
@@ -139,51 +139,25 @@ describe('server', () => {
     expect(body.comments.map((c) => c.id)).toEqual(['c1'])
   })
 
-  it('PUT は url に一致するページの分だけ置換し、他ページの分は残す', async () => {
-    await fetch(`${baseUrl}/comments`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ comment: makeComment({ id: 'c1' }), url: PAGE_URL }),
-    })
-    await fetch(`${baseUrl}/comments`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ comment: makeComment({ id: 'other-page' }), url: 'http://localhost:5173/other' }),
-    })
-
-    const replacement = [makeComment({ id: 'c2' }), makeComment({ id: 'c3' })]
-    const putRes = await fetch(`${baseUrl}/comments`, {
-      method: 'PUT',
-      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ comments: replacement, url: PAGE_URL }),
-    })
-    expect(putRes.status).toBe(200)
-
-    const getRes = await fetch(`${baseUrl}/comments`, {
-      headers: { Authorization: `Bearer ${TOKEN}` },
-    })
-    const body = (await getRes.json()) as { comments: Comment[] }
-    expect(body.comments.map((c) => c.id).sort()).toEqual(['c2', 'c3', 'other-page'])
-  })
-
-  it('同じ id で2回 POST しても重複しない（GET が1件を返す）', async () => {
+  it('同じ id で2回 POST すると2回目は 409 になり、既存の内容は変わらない', async () => {
     await fetch(`${baseUrl}/comments`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ comment: makeComment(), url: PAGE_URL }),
     })
-    await fetch(`${baseUrl}/comments`, {
+    const secondRes = await fetch(`${baseUrl}/comments`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ comment: makeComment({ text: '編集後' }), url: PAGE_URL }),
+      body: JSON.stringify({ comment: makeComment({ text: '別内容' }), url: PAGE_URL }),
     })
+    expect(secondRes.status).toBe(409)
 
     const getRes = await fetch(`${baseUrl}/comments`, {
       headers: { Authorization: `Bearer ${TOKEN}` },
     })
     const body = (await getRes.json()) as { comments: Comment[] }
     expect(body.comments).toHaveLength(1)
-    expect(body.comments[0]?.text).toBe('編集後')
+    expect(body.comments[0]?.text).toBe('ここ直して')
   })
 
   it('必須フィールド（anchor）が欠けた body は 400', async () => {
@@ -221,6 +195,157 @@ describe('server', () => {
   it('allowedOrigins に "*" 単体を渡すと createServer が起動時に例外を投げる', () => {
     const store = new CommentStore()
     expect(() => createServer({ store, token: TOKEN, allowedOrigins: ['*'] })).toThrow()
+  })
+
+  describe('PATCH /comments/:id', () => {
+    it('resolved を更新でき、既存の replies が保たれる', async () => {
+      await fetch(`${baseUrl}/comments`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comment: makeComment(), url: PAGE_URL }),
+      })
+      await fetch(`${baseUrl}/comments/c1/replies`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reply: {
+            id: 'r1',
+            author: 'claude',
+            text: '直しました',
+            createdAt: '2026-07-28T01:00:00.000Z',
+            updatedAt: '2026-07-28T01:00:00.000Z',
+          },
+        }),
+      })
+
+      const patchRes = await fetch(`${baseUrl}/comments/c1`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ patch: { resolved: true, resolvedBy: 'yuito' }, url: PAGE_URL }),
+      })
+      expect(patchRes.status).toBe(200)
+      const patched = (await patchRes.json()) as { comment: Comment }
+      expect(patched.comment.resolved).toBe(true)
+      expect(patched.comment.replies).toHaveLength(1)
+      expect(patched.comment.replies[0]?.id).toBe('r1')
+    })
+
+    it('replies を送ると 400（PATCH は replies を受け付けない）', async () => {
+      await fetch(`${baseUrl}/comments`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comment: makeComment(), url: PAGE_URL }),
+      })
+
+      const patchRes = await fetch(`${baseUrl}/comments/c1`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ patch: { replies: [] }, url: PAGE_URL }),
+      })
+      expect(patchRes.status).toBe(400)
+    })
+
+    it('存在しない id への PATCH は 404', async () => {
+      const res = await fetch(`${baseUrl}/comments/missing`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ patch: { text: 'x' }, url: PAGE_URL }),
+      })
+      expect(res.status).toBe(404)
+    })
+  })
+
+  describe('DELETE /comments/:id', () => {
+    it('削除でき、GET に出てこなくなる', async () => {
+      await fetch(`${baseUrl}/comments`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comment: makeComment(), url: PAGE_URL }),
+      })
+
+      const deleteRes = await fetch(`${baseUrl}/comments/c1`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${TOKEN}` },
+      })
+      expect(deleteRes.status).toBe(204)
+
+      const getRes = await fetch(`${baseUrl}/comments`, {
+        headers: { Authorization: `Bearer ${TOKEN}` },
+      })
+      const body = (await getRes.json()) as { comments: Comment[] }
+      expect(body.comments).toHaveLength(0)
+    })
+
+    it('存在しない id への DELETE は 404', async () => {
+      const res = await fetch(`${baseUrl}/comments/missing`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${TOKEN}` },
+      })
+      expect(res.status).toBe(404)
+    })
+  })
+
+  describe('POST /comments/:id/replies', () => {
+    /**
+     * What: 回帰テスト。この変更の主眼。channel の reply tool（= このエンドポイント）が
+     * 積んだ返信が、その後のブラウザからの PATCH（resolved 更新など）で消えないことを検証する。
+     * 旧 PUT（全件差し替え）はこの経路にバグがあった。
+     */
+    it('POST /replies で積んだ返信が、その後のブラウザからの PATCH で消えない', async () => {
+      await fetch(`${baseUrl}/comments`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comment: makeComment(), url: PAGE_URL }),
+      })
+
+      const replyRes = await fetch(`${baseUrl}/comments/c1/replies`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reply: {
+            id: 'r1',
+            author: 'claude',
+            text: '直しました',
+            createdAt: '2026-07-28T01:00:00.000Z',
+            updatedAt: '2026-07-28T01:00:00.000Z',
+          },
+        }),
+      })
+      expect(replyRes.status).toBe(201)
+
+      // ブラウザは reply の存在を知らないまま、既読状態や text だけを PATCH する
+      const patchRes = await fetch(`${baseUrl}/comments/c1`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ patch: { text: 'ここ直して(編集)' }, url: PAGE_URL }),
+      })
+      expect(patchRes.status).toBe(200)
+
+      const getRes = await fetch(`${baseUrl}/comments`, {
+        headers: { Authorization: `Bearer ${TOKEN}` },
+      })
+      const body = (await getRes.json()) as { comments: Comment[] }
+      expect(body.comments[0]?.text).toBe('ここ直して(編集)')
+      expect(body.comments[0]?.replies).toHaveLength(1)
+      expect(body.comments[0]?.replies[0]?.id).toBe('r1')
+    })
+
+    it('存在しない comment id への reply 追加は 404', async () => {
+      const res = await fetch(`${baseUrl}/comments/missing/replies`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reply: {
+            id: 'r1',
+            author: 'claude',
+            text: 'x',
+            createdAt: '2026-07-28T00:00:00.000Z',
+            updatedAt: '2026-07-28T00:00:00.000Z',
+          },
+        }),
+      })
+      expect(res.status).toBe(404)
+    })
   })
 })
 

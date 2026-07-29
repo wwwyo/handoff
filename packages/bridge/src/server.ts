@@ -3,14 +3,26 @@
  *
  * How: `node:http` のみで実装する（overlay 同様、bridge も依存を絞る）。body の
  * 形状検証だけは zod（`packages/bridge` の既存依存）に任せる。
- * - `POST /comments`         : body `{ comment: Comment, url: string }`。id があれば upsert
- * - `GET  /comments?url=...` : `{ comments: Comment[] }` を返す。overlay の StorageAdapter#load 相当。
- *                              `url` クエリを指定するとそのページの分だけに絞る（未指定なら全件）
- * - `PUT  /comments`         : body `{ comments: Comment[], url: string }`。overlay の StorageAdapter#save 相当
- * - `GET  /health`           : 認証不要のヘルスチェック
+ * - `POST   /comments`             : body `{ comment: Comment, url: string }`。**作成専用**。既存 id なら 409
+ * - `PATCH  /comments/:id`         : body `{ patch: CommentPatch, url: string }`。部分更新
+ * - `DELETE /comments/:id`         : 204。既存 id が無ければ 404
+ * - `POST   /comments/:id/replies` : body `{ reply: Reply, url: string }`。返信の追加
+ * - `GET    /comments?url=...`     : `{ comments: Comment[] }` を返す。overlay の StorageAdapter#load 相当。
+ *                                    `url` クエリを指定するとそのページの分だけに絞る（未指定なら全件）
+ * - `GET    /health`               : 認証不要のヘルスチェック
  *
  * body/query の形状は overlay 側の adapter 契約（`packages/overlay/src/adapters/bridge.ts`）に
  * 合わせている。ページ URL は `Comment` 型の外（リクエストの文脈）として渡される。
+ *
+ * Why not `PUT /comments`（全件差し替え）: 2 人が同じページを開いていると、片方の
+ * 削除がもう片方の新規コメントを消す（last-writer-wins）。リソース単位の
+ * POST/PATCH/DELETE に分けることで、片方の操作が他方の未知の変更を巻き添えにしない。
+ *
+ * Why not `PATCH` が `replies` を受け付けない: ブラウザは自分が最後に読み込んだ
+ * `replies` 配列全体を握っている。もし PATCH がそれをそのまま受け入れると、Claude が
+ * `reply` tool で積んだ「ブラウザがまだ知らない返信」を、ブラウザ発の PATCH が
+ * 上書きして消してしまう。返信は必ず専用の `POST /comments/:id/replies` を通し、
+ * store 側で追記させる。
  *
  * セキュリティ: localhost にのみ bind し、`/health` 以外は共有トークンの
  * Bearer 認証を必須にする。CORS は許可 origin を明示的に渡されたパターンとの
@@ -21,7 +33,7 @@ import { createServer as createHttpServer, type IncomingMessage, type ServerResp
 import { z } from 'zod'
 import type { CommentStore } from './comment-store.js'
 
-/** POST/PUT body に来る Comment の形状検証。overlay の型（core/types.ts）の必須部分だけを見る。 */
+/** POST body に来る Comment の形状検証。overlay の型（core/types.ts）の必須部分だけを見る。 */
 const AnchorSchema = z.object({
   selector: z.string(),
   offsetX: z.number(),
@@ -73,9 +85,28 @@ const PostCommentsBodySchema = z.object({
   url: z.string(),
 })
 
-const PutCommentsBodySchema = z.object({
-  comments: z.array(CommentSchema),
+/**
+ * PATCH body の検証。`.strict()` で明示的に未知キー（特に `replies`）を弾く。
+ * `.partial()` だけだと余剰キーを黙って無視してしまい、「replies を送っても
+ * 400 にならず単に無視される」という誤った安心感を与えるため、strict にする。
+ */
+const CommentPatchSchema = CommentSchema.pick({
+  text: true,
+  anchor: true,
+  scope: true,
+  resolved: true,
+  resolvedBy: true,
+})
+  .partial()
+  .strict()
+
+const PatchCommentBodySchema = z.object({
+  patch: CommentPatchSchema,
   url: z.string(),
+})
+
+const AddReplyBodySchema = z.object({
+  reply: ReplySchema,
 })
 
 /** body 読み取り時にサイズ上限を超えたことを表す。413 に変換するためだけの専用 error。 */
@@ -177,7 +208,7 @@ export function createServer(options: ServerOptions) {
     if (origin && originOk) {
       res.setHeader('Access-Control-Allow-Origin', origin)
       res.setHeader('Vary', 'Origin')
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS')
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS')
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
     }
 
@@ -225,7 +256,11 @@ export function createServer(options: ServerOptions) {
             sendJson(res, 400, { error: 'invalid comment payload', issues: parsed.error.issues })
             return
           }
-          store.add(parsed.data.comment, parsed.data.url)
+          const created = store.add(parsed.data.comment, parsed.data.url)
+          if (!created) {
+            sendJson(res, 409, { error: 'comment already exists' })
+            return
+          }
           sendJson(res, 201, { ok: true })
         } catch (error) {
           if (error instanceof PayloadTooLargeError) {
@@ -238,23 +273,71 @@ export function createServer(options: ServerOptions) {
       return
     }
 
-    if (req.method === 'PUT' && reqUrl.pathname === '/comments') {
+    // `/comments/:id` と `/comments/:id/replies` を切り分ける。
+    const commentIdMatch = reqUrl.pathname.match(/^\/comments\/([^/]+)$/)
+    const repliesMatch = reqUrl.pathname.match(/^\/comments\/([^/]+)\/replies$/)
+
+    if (req.method === 'PATCH' && commentIdMatch) {
+      const id = decodeURIComponent(commentIdMatch[1] ?? '')
       void (async () => {
         try {
           const raw = await readBody(req, maxBodyBytes)
-          const parsed = PutCommentsBodySchema.safeParse(JSON.parse(raw))
+          const parsed = PatchCommentBodySchema.safeParse(JSON.parse(raw))
           if (!parsed.success) {
-            sendJson(res, 400, { error: 'invalid comments payload', issues: parsed.error.issues })
+            sendJson(res, 400, { error: 'invalid patch payload', issues: parsed.error.issues })
             return
           }
-          store.replaceAll(parsed.data.url, parsed.data.comments)
-          sendJson(res, 200, { ok: true })
+          const updated = store.update(id, parsed.data.patch)
+          if (!updated) {
+            sendJson(res, 404, { error: 'comment not found' })
+            return
+          }
+          sendJson(res, 200, { comment: updated })
         } catch (error) {
           if (error instanceof PayloadTooLargeError) {
             sendJson(res, 413, { error: 'payload too large' })
             return
           }
-          sendJson(res, 400, { error: 'invalid comments payload' })
+          sendJson(res, 400, { error: 'invalid patch payload' })
+        }
+      })()
+      return
+    }
+
+    if (req.method === 'DELETE' && commentIdMatch) {
+      const id = decodeURIComponent(commentIdMatch[1] ?? '')
+      const deleted = store.delete(id)
+      if (!deleted) {
+        sendJson(res, 404, { error: 'comment not found' })
+        return
+      }
+      res.writeHead(204)
+      res.end()
+      return
+    }
+
+    if (req.method === 'POST' && repliesMatch) {
+      const id = decodeURIComponent(repliesMatch[1] ?? '')
+      void (async () => {
+        try {
+          const raw = await readBody(req, maxBodyBytes)
+          const parsed = AddReplyBodySchema.safeParse(JSON.parse(raw))
+          if (!parsed.success) {
+            sendJson(res, 400, { error: 'invalid reply payload', issues: parsed.error.issues })
+            return
+          }
+          const updated = store.addReply(id, parsed.data.reply)
+          if (!updated) {
+            sendJson(res, 404, { error: 'comment not found' })
+            return
+          }
+          sendJson(res, 201, { comment: updated })
+        } catch (error) {
+          if (error instanceof PayloadTooLargeError) {
+            sendJson(res, 413, { error: 'payload too large' })
+            return
+          }
+          sendJson(res, 400, { error: 'invalid reply payload' })
         }
       })()
       return
