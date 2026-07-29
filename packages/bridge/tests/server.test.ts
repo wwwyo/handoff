@@ -1,11 +1,12 @@
 /**
- * What: 認証・CORS・リソース単位 API（POST/PATCH/DELETE/replies）の契約を検証する。
+ * What: 認証・CORS・リソース単位 API（POST/PATCH/DELETE/replies）・cursor 付き一覧・
+ * rate limit の契約を検証する。`CommentBackend` は `InMemoryBackend` を使う。
  */
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
 import type { Comment } from '@wwwyo/handoff/types'
-import { CommentStore } from '../src/comment-store.js'
+import { InMemoryBackend } from '../src/backend/memory.js'
 import { createServer } from '../src/server.js'
 
 const TOKEN = 'test-token'
@@ -37,8 +38,8 @@ describe('server', () => {
   let baseUrl: string
 
   beforeEach(async () => {
-    const store = new CommentStore()
-    httpServer = createServer({ store, token: TOKEN, allowedOrigins: ['http://localhost:*'] })
+    const backend = new InMemoryBackend()
+    httpServer = createServer({ backend, token: TOKEN, allowedOrigins: ['http://localhost:*'] })
     await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
     const { port } = httpServer.address() as AddressInfo
     baseUrl = `http://127.0.0.1:${port}`
@@ -48,7 +49,7 @@ describe('server', () => {
     await new Promise<void>((resolve) => httpServer.close(() => resolve()))
   })
 
-  it('/health は認証なしで 200', async () => {
+  it('/health は認証・rate limit なしで 200', async () => {
     const res = await fetch(`${baseUrl}/health`)
     expect(res.status).toBe(200)
   })
@@ -115,7 +116,7 @@ describe('server', () => {
       headers: { Authorization: `Bearer ${TOKEN}` },
     })
     expect(getRes.status).toBe(200)
-    const body = (await getRes.json()) as { comments: Comment[] }
+    const body = (await getRes.json()) as { comments: Comment[]; nextCursor?: string }
     expect(body.comments).toHaveLength(1)
     expect(body.comments[0]?.id).toBe('c1')
   })
@@ -137,6 +138,30 @@ describe('server', () => {
     })
     const body = (await getRes.json()) as { comments: Comment[] }
     expect(body.comments.map((c) => c.id)).toEqual(['c1'])
+  })
+
+  it('GET に cursor/limit を付けると続きから件数分だけ返り、nextCursor が付く', async () => {
+    for (const id of ['c1', 'c2', 'c3']) {
+      await fetch(`${baseUrl}/comments`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comment: makeComment({ id }), url: PAGE_URL }),
+      })
+    }
+
+    const firstRes = await fetch(`${baseUrl}/comments?limit=2`, {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    })
+    const firstBody = (await firstRes.json()) as { comments: Comment[]; nextCursor?: string }
+    expect(firstBody.comments.map((c) => c.id)).toEqual(['c1', 'c2'])
+    expect(firstBody.nextCursor).toBeDefined()
+
+    const secondRes = await fetch(`${baseUrl}/comments?limit=2&cursor=${firstBody.nextCursor}`, {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    })
+    const secondBody = (await secondRes.json()) as { comments: Comment[]; nextCursor?: string }
+    expect(secondBody.comments.map((c) => c.id)).toEqual(['c3'])
+    expect(secondBody.nextCursor).toBeUndefined()
   })
 
   it('同じ id で2回 POST すると2回目は 409 になり、既存の内容は変わらない', async () => {
@@ -188,13 +213,13 @@ describe('server', () => {
   })
 
   it('token に空文字を渡すと createServer が起動時に例外を投げる', () => {
-    const store = new CommentStore()
-    expect(() => createServer({ store, token: '', allowedOrigins: ['http://localhost:*'] })).toThrow()
+    const backend = new InMemoryBackend()
+    expect(() => createServer({ backend, token: '', allowedOrigins: ['http://localhost:*'] })).toThrow()
   })
 
   it('allowedOrigins に "*" 単体を渡すと createServer が起動時に例外を投げる', () => {
-    const store = new CommentStore()
-    expect(() => createServer({ store, token: TOKEN, allowedOrigins: ['*'] })).toThrow()
+    const backend = new InMemoryBackend()
+    expect(() => createServer({ backend, token: TOKEN, allowedOrigins: ['*'] })).toThrow()
   })
 
   describe('PATCH /comments/:id', () => {
@@ -287,9 +312,10 @@ describe('server', () => {
 
   describe('POST /comments/:id/replies', () => {
     /**
-     * What: 回帰テスト。この変更の主眼。channel の reply tool（= このエンドポイント）が
-     * 積んだ返信が、その後のブラウザからの PATCH（resolved 更新など）で消えないことを検証する。
-     * 旧 PUT（全件差し替え）はこの経路にバグがあった。
+     * What: 回帰テスト。この変更の主眼。channel（撤去済み）が担っていた返信積み上げ
+     * 相当の経路（このエンドポイント）が積んだ返信が、その後のブラウザからの PATCH
+     * （resolved 更新など）で消えないことを検証する。旧 PUT（全件差し替え）は
+     * この経路にバグがあった。
      */
     it('POST /replies で積んだ返信が、その後のブラウザからの PATCH で消えない', async () => {
       await fetch(`${baseUrl}/comments`, {
@@ -359,9 +385,9 @@ describe('server (default localhost-family origins)', () => {
   let baseUrl: string
 
   beforeEach(async () => {
-    const store = new CommentStore()
+    const backend = new InMemoryBackend()
     httpServer = createServer({
-      store,
+      backend,
       token: TOKEN,
       allowedOrigins: ['http://localhost:*', 'http://127.0.0.1:*', 'http://[::1]:*'],
     })
@@ -392,9 +418,9 @@ describe('server (default localhost-family origins)', () => {
 
 describe('server (body size limit)', () => {
   it('サイズ超過の body は 413 になる', async () => {
-    const store = new CommentStore()
+    const backend = new InMemoryBackend()
     const httpServer = createServer({
-      store,
+      backend,
       token: TOKEN,
       allowedOrigins: ['http://localhost:*'],
       maxBodyBytes: 100,
@@ -411,6 +437,63 @@ describe('server (body size limit)', () => {
         body: JSON.stringify({ comment: oversizedComment, url: PAGE_URL }),
       })
       expect(res.status).toBe(413)
+    } finally {
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()))
+    }
+  })
+})
+
+describe('server (rate limit)', () => {
+  /**
+   * What: 公開エンドポイントの荒らし対策として rate limit を超えると 429 になることを検証する。
+   * このテストは rate limiter がプロセス内実装であることの裏返しでもある — 同一プロセス内の
+   * 同一 IP からの連投だけを弾ける（decision.log 参照）。
+   */
+  it('rate limit を超えると 429 になる', async () => {
+    const backend = new InMemoryBackend()
+    const httpServer = createServer({
+      backend,
+      token: TOKEN,
+      allowedOrigins: ['http://localhost:*'],
+      rateLimit: { windowMs: 60_000, max: 2 },
+    })
+    await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
+    const { port } = httpServer.address() as AddressInfo
+    const baseUrl = `http://127.0.0.1:${port}`
+
+    try {
+      const headers = { Authorization: `Bearer ${TOKEN}` }
+      const first = await fetch(`${baseUrl}/comments`, { headers })
+      const second = await fetch(`${baseUrl}/comments`, { headers })
+      const third = await fetch(`${baseUrl}/comments`, { headers })
+
+      expect(first.status).toBe(200)
+      expect(second.status).toBe(200)
+      expect(third.status).toBe(429)
+    } finally {
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()))
+    }
+  })
+
+  it('/health は rate limit の対象外', async () => {
+    const backend = new InMemoryBackend()
+    const httpServer = createServer({
+      backend,
+      token: TOKEN,
+      allowedOrigins: ['http://localhost:*'],
+      rateLimit: { windowMs: 60_000, max: 1 },
+    })
+    await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
+    const { port } = httpServer.address() as AddressInfo
+    const baseUrl = `http://127.0.0.1:${port}`
+
+    try {
+      // /comments を1回消費してから /health を何度叩いても通ることを見る
+      await fetch(`${baseUrl}/comments`, { headers: { Authorization: `Bearer ${TOKEN}` } })
+      const health1 = await fetch(`${baseUrl}/health`)
+      const health2 = await fetch(`${baseUrl}/health`)
+      expect(health1.status).toBe(200)
+      expect(health2.status).toBe(200)
     } finally {
       await new Promise<void>((resolve) => httpServer.close(() => resolve()))
     }

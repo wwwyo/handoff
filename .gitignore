@@ -5,6 +5,8 @@ coverage/
 .env
 .env.local
 *.log
+# 実装時の判断の記録。追跡対象（*.log に巻き込まれないよう明示的に除外を解除する）
+!decision.log
 
 # Playwright
 test-results/

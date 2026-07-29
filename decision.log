@@ -1,0 +1,294 @@
+# decision.log
+
+設計文書（`.agent/design/remote-handoff.md`）に書かれていないが、実装時に判断したこと。
+新しいものを上に足す（newest-first）。
+
+各項目は「何を選んだか / なぜ / 何を捨てたか」を書く。設計文書に昇格すべき決定は、
+そちらへ移してここから消す。
+
+---
+
+## 2026-07-30 `CommentBackend` 契約: `Comment | null` / `{ comments, nextCursor }` を `StoredComment` ベースへ変え、`github`/`postgres` の配線も済ませた
+
+一度「凍結」した `CommentBackend`（`src/backend/types.ts`）の契約を、凍結後にもう一段
+変更した。理由: `handoff-bridge comments --url` を指定しない一覧取得（複数ページの
+コメントが混ざる状況）で、各コメントがどのページに書かれたものかを呼び出し側が
+一切知る術が無かった。`Comment` 型自体は意図的に `pageUrl` を持たない設計（コメントは
+export/import でページをまたぐため、どのページで書かれたかは保存先との通信の文脈に
+属する、という判断は変えていない）。だが読み出す側（`comments-format.ts`）は
+「どのページの指摘か」を知らないと直せず、結局 `unspecified` としか出せない状態に
+陥っていた。これは `Comment` の設計ではなく `CommentBackend` 側の契約の不備
+（読み出し用の型が保存時の文脈情報を運んでいなかった）と判断し、直した。
+
+変更点: `StoredComment { comment: Comment; pageUrl: string }` を導入し、
+`create` の成功時は `{ created: true; stored: StoredComment }`、
+`update` / `addReply` / `get` は `Promise<StoredComment | null>`、
+`list` は `{ items: StoredComment[]; nextCursor?: string }` を返すようにした
+(`memory.ts` / `github.ts` / `postgres.ts` の3実装すべてに反映)。
+
+**HTTP のレスポンス形状（`GET /comments` → `{ comments: Comment[], nextCursor? }`）は
+維持した**。overlay 側の adapter（`packages/overlay/src/adapters/bridge.ts`）がこの形を
+読んでおり、そちらまで変えると overlay 側の改修が要る。`server.ts` は backend から
+受けた `StoredComment[]`（`items`）を `comment` フィールドだけに落として返すことで、
+backend 契約の変更を HTTP の外部インターフェースに漏らさないようにした。
+`PATCH` / `POST replies` のレスポンス `{ comment: Comment }` も同様に `.comment` へ落として返す。
+
+合わせて `src/backend/select.ts` の `github` / `postgres` 配線（それまで TODO で
+throw するだけの枠だった）も済ませた。オプションは環境変数から読む: `github` は
+`GITHUB_OWNER` / `GITHUB_REPO` / `GITHUB_TOKEN`、`postgres` は `DATABASE_URL`。
+いずれかが欠けている場合は「何を設定すべきか」を名指しするメッセージで起動時に
+落とす（黙って `undefined` を実装へ渡さない）。
+
+**捨てたもの**: `ListQuery`/`ListResult` を凍結のまま据え置く案（当初の凍結宣言を
+額面通り守る）。`unspecified` 表示のまま使い続けるコストの方が大きいと判断した。
+
+## 2026-07-30 `PostgresBackend`: driver に `pg`（node-postgres）を選んだ
+
+候補は `pg` と `postgres`（porsager）。`postgres` はタグ付きテンプレートでパラメータ
+化する API が中心で、素の SQL 文字列 + `$1,$2...` 形式のパラメータ配列を渡すには
+`sql.unsafe()` を経由する必要がある。今回は「SQL を組む部分を DB 無しでユニット
+テストする」（純粋関数が `{ text, values }` を返す形）ために `$1,$2` 形式が自然な
+`pg` を選んだ。`pg` は歴史が長く、`Pool` の挙動・エラーの出方の情報も豊富。
+
+**捨てたもの**: `postgres` の軽さ（依存が少ない・素の ESM）とタグ付きテンプレートに
+よる書きやすさ。型は `@types/pg`（DefinitelyTyped）を別途 devDependency で追加した
+（`pg` 自体は型を同梱していないため）。
+
+## 2026-07-30 `PostgresBackend`: migration ツールは入れず、素の SQL ファイル 1 本にした
+
+`packages/bridge/migrations/0001_init.sql` を手書きし、適用手順は同ディレクトリの
+`APPLYING.md` に書いた（README は別エージェントが書き換えているため触らない）。
+node-pg-migrate 等の履歴管理ツールを入れる案もあったが、現時点で migration は
+1 本のみで、履歴テーブルの整合性を心配するほどの数がない。ツールを 1 つ増やす
+コスト（依存・学習・CI 設定）に見合わない。
+
+`create table if not exists` / `create index if not exists` にして冪等にすることで、
+「適用済みかどうかを記録する仕組みが無い」ことの弱点（誤って2回流したときの事故）を
+軽減した。
+
+**捨てたもの**: migration 履歴の自動管理、ロールバック機構。ファイルが増えて
+「どれが当たっているか手動で追えなくなる」段になったら node-pg-migrate 等を
+再検討する。
+
+## 2026-07-30 `PostgresBackend`: id / comment_id 列を `uuid` ではなく `text` にした
+
+設計文書のスキーマ案は `id uuid` だったが、`tests/backend/contract.ts`（共有契約
+テスト）は `'c1'` のような非 UUID 文字列を id に使っている。`CommentBackend` の
+契約上も id はただの文字列であり uuid とは規定していない（overlay 側は実際には
+`crypto.randomUUID()` を使うが、それは呼び出し側の事情でしかない）。DB 側で
+`uuid` 型に固定すると契約より狭い前提を持ち込み、契約テストが素通りできなくなる
+ため `text` にした。
+
+**捨てたもの**: `uuid` 型が持つ入力バリデーション（不正な形式の文字列を DB 層で
+弾く効果）。id の妥当性はサーバ側（呼び出し元）の責務とし、DB は関与しない。
+
+## 2026-07-30 `PostgresBackend`: SQL を組む部分・行変換・cursor 符号化を純粋関数として切り出した
+
+`buildListCommentsQuery` / `buildRepliesQuery` / `buildInsertCommentQuery` /
+`buildUpdateCommentQuery` / `rowToComment` / `replyRowToReply` / `encodeCursor` /
+`decodeCursor` / `assertSafeIdentifier` はすべて DB 接続を持たない純粋関数として
+`postgres.ts` からエクスポートし、`postgres.test.ts` で DB 無しにユニットテストした
+（CI に Postgres が無いため）。実 DB を使う統合テストは
+`process.env.HANDOFF_TEST_DATABASE_URL` が無ければ `describe.skipIf` で丸ごと
+飛ばし、`pnpm test` が DB 無し環境で必ず green になるようにした。
+
+**結果として CI では検証されないもの**: 実際の SQL 文字列が Postgres に対して
+構文的に妥当であること、jsonb のシリアライズ/デシリアライズが実際に往復すること、
+`seq` によるカーソルが同時書き込み下でも取りこぼし・重複なく機能すること、
+外部キー制約（`on delete cascade`）が効くこと。これらは
+`HANDOFF_TEST_DATABASE_URL` を設定したローカル/手動実行でのみ検証される
+（このセッションでは一時的にローカル Postgres を起動し、30件全て green に
+なることを確認済み）。
+
+**捨てたもの**: CI 上での実 DB 検証。デプロイ先が決まり CI に Postgres サービス
+コンテナ等を足せる段になったら、`describe.skipIf` の条件を CI 上でも満たすよう
+環境変数を用意し、実質常時実行に変える余地を残している。
+
+## 2026-07-30 `GitHubIssueBackend`: JSON メタブロックだけをパース対象にし、人間可読部分は複製にした
+
+設計文書は「本文には人間が読む要約と機械が読む JSON ブロックを入れる」とだけ書いており、
+どちらを真実のソースにするかは書いていない。人間可読の要約（投稿者・ページ URL・
+セレクタ・本文）から正規表現で復元する案は却下した。理由: コメント本文に `---` や
+` ```json ` を含むテキストが来ると、要約セクションの境界検出がユーザー入力の内容次第で
+壊れる。認証なしで誰でも書ける前提（本文は untrusted）である以上、パース処理が
+入力依存で壊れる設計は避けたい。
+
+JSON ブロックには `anchor` / `scope` / `meta` / `id` に加えて `author` / `pageUrl` /
+`text` / `resolvedBy` / `resolvedAt` / `unread` も含め、これを唯一のパース対象にした。
+人間可読部分は GitHub の issue 画面で人が読むための複製であり、書き込み専用（レンダ
+リングするだけでパースしない）。
+
+**捨てたもの**: 人間が issue 本文を直接編集して内容を反映させる経路（複製元の JSON
+ブロックが変わらない限り反映されない）。認証なしの外部投稿者が本文をいじれる余地を
+最初から作らない方を優先した。
+
+## 2026-07-30 `GitHubIssueBackend`: `createdAt` / `updatedAt` は GitHub 側（issue の
+`created_at` / `updated_at`）を正とした
+
+JSON メタブロックに含めることもできたが、ローカルで生成した timestamp と GitHub 側の
+実際の反映時刻がずれたときにどちらが正か曖昧になる。GitHub 側の時刻を唯一のソースに
+すれば、`update` のたびに issue が実際に更新された時刻がそのまま返る。
+
+**捨てたもの**: 呼び出し側が指定した `updatedAt` をそのまま尊重すること（`create` の
+入力に含まれていても無視し、issue 作成時刻で上書きする）。
+
+## 2026-07-30 `GitHubIssueBackend`: id → issue 番号のキャッシュに無い id は、ラベルで
+絞った issue を全ページ辿って作り直す（検索 API は一切使わない）
+
+`in:body` 検索（GitHub Search API）はインデックス反映に遅延があるため、作成直後の
+`update` / `addReply` がそれに頼ると失敗しうる。REST の通常の issue 一覧（`GET /issues`）
+はインデックス遅延の対象ではなく、常に最新の状態を返すため、これだけを使う。
+
+**この設計の限界**: (1) プロセスが複数あると、各プロセスが独立にキャッシュを持つ。
+あるプロセスが `create` した直後を、別プロセスが `get` すると、そのプロセスにとっては
+キャッシュミスになり、一覧の取り直しが走る（動作はするが、プロセス数分のコストがかかる）。
+(2) 他人（別プロセス・手動での issue 編集）が本文の JSON ブロックを書き換えたり、
+ラベルを剥がしたりすると、キャッシュの内容は古いままそれに気づかない。次にキャッシュ
+ミスが起きて全件再取得するまで反映されない。
+
+**捨てたもの**: 変更をリアルタイムに検知する仕組み（webhook 等）。ローカルの
+プロセス内キャッシュより高コストな構成になるため、現時点では見送った。
+
+## 2026-07-30 `GitHubIssueBackend`: `list` の cursor にページ番号を選び、`sort=created&direction=asc` にした
+
+`ListQuery.cursor` は不透明な文字列（既存の decision）。GitHub の issue 一覧は
+ページ番号か `since`（更新時刻）で辿れるが、ページ番号を選んだ。
+
+- **ページ番号 + `direction=asc`**: 新しい issue は一覧の末尾に足されるだけになる。
+  途中のページを cursor で辿っている最中に新規作成があっても、既存ページの内容は
+  ずれない。**トレードオフ**: 途中で新規作成された issue は、cursor を最後まで辿った
+  時点でもまだ見えていない可能性がある（次の完全な `list({})` 呼び出しで拾われる）。
+  「取りこぼし」ではなく「反映が遅れる」方向に倒している。
+- `since` を選ばなかった理由: `since` は「その時刻以降に更新された」issue を返す
+  仕様で、境界の issue（updated_at がちょうど `since` と一致するもの）が前後の呼び出しで
+  重複して返りうる。かつ `since` だけでは真のページネーションにならず、`page` と併用が
+  必要になり結局ページ番号の問題を引き継ぐ。`direction=desc`（既定）+ ページ番号も
+  却下: 新規作成のたびに既存ページの内容がずれ、重複や取りこぼしが起きる。
+
+## 2026-07-30 `GitHubIssueBackend`: `pageUrl` の絞り込みは、取得済みの1ページの中だけで行う
+
+本文の JSON ブロックに `pageUrl` を埋めているので `in:body` 検索でも絞り込めるが、
+検索インデックス遅延の問題を再び持ち込むことになるため使わない。ラベルで絞った
+issue 一覧を全件取り直してから `pageUrl` でフィルタする方が確実だが、issue が増える
+ほど毎回全件走査することになり重い。
+
+今回は「`fetchIssuePage` で取得した1ページ分だけを `pageUrl` でフィルタして返す」
+実装にした。**この限界**: `pageUrl` を指定した `list` は、1ページの中に該当ページの
+コメントが少ない/無いと、`limit` に満たない結果（0件のことすらある）を返す。
+呼び出し側は `nextCursor` がある限り呼び続ける前提でないと、他ページに存在する
+該当コメントを取りこぼす。
+
+**捨てたもの**: 呼び出し側が `list` を1回呼べば `pageUrl` 該当分が `limit` 件
+（か全件）確実に返ってくるという期待。issue 件数がまだ小さい前提（設計文書
+「issue が荒れることは受け入れる」）で、全件走査の重さより実装の単純さを優先した。
+
+## 2026-07-30 `GitHubIssueBackend`: 削除はラベルを剥がすだけにし、issue の close とは独立にした
+
+issue を消す REST API が無い。close は「解決 (`resolved: true`)」の意味に使っている
+ため、削除に close を流用すると「解決済み」と「削除済み」が区別できなくなる
+（削除されたのに `resolved: true` の issue として一覧に残り続けたり、逆に未解決の
+まま消したいときに close してしまうと意味が変わる）。
+
+ラベルを剥がして handoff の一覧・検索対象から外すことを「削除」とした。issue 自体は
+GitHub 上に残る（state は変更しない）。ラベルを剥がした id は id→issue 番号キャッシュ
+からも消すので、以後同じ id で `create` されたときは新しい issue として作り直される
+（古い issue はラベル無しのまま残置される）。
+
+**捨てたもの**: 「削除したら本当に見えなくなる」体験の完全性。GitHub 上には
+ラベル無し issue として残るため、リポジトリの issue 一覧を直接見れば痕跡が残る。
+
+## 2026-07-30 backend の契約テストを `tests/backend/contract.ts` として共有関数化した
+
+`InMemoryBackend` 用に書くテスト（create の conflict / update の null / delete の
+false / addReply の null / list の cursor 継続）は、GitHub / Postgres 実装でも
+そのまま同じことを検証したい。個別ファイルに書き捨てるとテストがずれていく。
+
+`runCommentBackendContractTests(createBackend)` という関数にして、backend の
+ファクトリを受け取れば一通り検証する形にした。`tests/backend/memory.test.ts` は
+これを呼ぶだけ。github/postgres の実装が来たら同じ関数を呼ぶテストファイルを
+足すだけで契約を担保できる。
+
+**捨てたもの**: backend ごとに独立したテストの書きっぷり。共有関数の呼び出し
+シグネチャに縛られる（今回は `() => CommentBackend | Promise<CommentBackend>` の
+1形状に決め打ちした）。
+
+## 2026-07-30 rate limit を IP 単位・プロセス内 `Map` の固定窓カウンタで実装した
+
+コメントを認証なしで誰でも書ける前提にした以上、公開エンドポイントの荒らし対策は
+必須（`.agent/design/remote-handoff.md`「認証と、割り切っていること」）。厳密な
+sliding window やトークンバケットではなく、`windowMs` ごとにリセットされる
+固定窓カウンタを `Map<ip, {count, resetAt}>` で持つだけの単純な実装にした。
+
+**この実装は単一プロセス前提の弱い実装である。** 複数プロセス・複数インスタンスに
+スケールすると、IP ごとの上限はインスタンスごとに独立してカウントされ、全体では
+実質的に「設定した上限 × インスタンス数」まで通ってしまう。プロセスをまたいだ
+共有カウンタ（Redis 等）にする選択肢はあるが、リモートデプロイ先が未決
+（同ドキュメント「未決」節）の現時点では過剰実装と判断し見送った。
+
+**捨てたもの**: 複数インスタンスでも正確に効く rate limit。デプロイ先が決まり、
+複数インスタンスで動かす段になったら再検討する。
+
+## 2026-07-30 トークンを起動時ランダム生成から設定値へ変えた（`HANDOFF_TOKEN` / `--token`）
+
+リモートにデプロイすると、以前の「起動のたびに `randomBytes` で新規生成」する
+やり方では、再起動するたびにオーバーレイ側が embed している capability token と
+食い違って使えなくなる。`--token` 引数 → 環境変数 `HANDOFF_TOKEN` → の優先順位で
+固定値を受け取り、どちらも無ければ起動を拒否するようにした。
+
+**ローカルの手軽さと引き換えた分**: 以前は何も指定せず `serve` するだけで
+動いた。今は明示的に token を渡すか `--generate-token`（ランダム生成の明示的な
+逃げ道）を付けない限り起動しない。1手間増えるが、うっかりトークン無しの
+公開待受を起動できてしまう事故のほうが避けたい失敗だった。
+
+## 2026-07-30 channel（push）を撤去した
+
+`.agent/design/remote-handoff.md`「最初に決まること」節の判断を実装に反映した。
+channel は「ユーザーの操作なしに外部プロセスがセッションのコンテキストへ
+テキストを入れる」機構であり、コメントを認証なしで誰でも書ける前提にした以上、
+ステージング URL を知る誰でも開発者の Claude Code に文章を流し込めることになる。
+本文を untrusted マーカーで囲む対策（`buildCommentNotification`）は緩和であって
+保証ではなく、Claude が指示文を無視する保証は無い。**認証を捨てるなら push も
+捨てる。**
+
+`src/channel.ts` / `tests/channel.test.ts` を削除し、`@modelcontextprotocol/sdk`
+への依存を `package.json` から外した。`CommentStore` の `'added'` イベント
+（channel が新規コメントの通知トリガーに使っていた）も、購読者が無くなったため
+`InMemoryBackend` には持たせていない。
+
+**捨てたもの**: Claude のセッションへの自動 push。代わりに開発者が「コメント見て」
+と言ったときに `handoff-bridge comments` を叩いて読みに行く運用にする。実装は
+git 履歴に残るので、認証を入れる判断に変われば戻せる。
+
+## 2026-07-30 `CommentBackend` のカーソルを不透明な文字列にした
+
+設計文書は前版で `seq bigserial` を前提に置いていた。これは Postgres の都合であり、
+GitHub issue には存在しない。契約に漏らすと backend を差し替えられなくなる。
+
+`ListQuery.cursor` は `string` とし、**呼び出し側は中身を解釈しない**。Postgres は
+連番を、GitHub は更新時刻やページ番号を詰めてよい。
+
+**捨てたもの**: 呼び出し側でカーソルの大小比較や範囲指定ができる可能性。必要になったら
+`list` に条件を足す方が、カーソルの構造を公開するより安全。
+
+## 2026-07-30 `CommentBackend` にトランザクションを約束させない
+
+GitHub にトランザクションが無い以上、契約に含めると GitHub 実装が契約違反になる。
+`addReply` が失敗したときにコメント側が巻き戻る保証は無い前提で、呼び出し側を冪等に組む。
+
+**トレードオフ**: Postgres 実装では本来トランザクションが張れるのに、その強みを
+インターフェース越しには使えない。差し替え可能性を優先した。
+
+## 2026-07-30 パッケージを分割せず `packages/bridge` に留めた
+
+設計文書は `handoff-ingest`（リモート）と読み口（ローカル）を別物として描いているが、
+パッケージとしては1つに留め、CLI のサブコマンドで役割を分ける。
+
+- `handoff-bridge serve` — ingest（リモートにデプロイする側）
+- `handoff-bridge comments` — 読み口（ローカルで Claude が叩く側）
+
+理由は、両者が `CommentBackend` と型を共有しており、パッケージを割ると workspace 依存と
+ビルド順の管理が増えるだけで、得るものが「デプロイ成果物が小さくなる」程度だから。
+デプロイサイズが問題になった時点で割る。
+
+**捨てたもの**: リモートにデプロイする成果物から、ローカル専用のコードを物理的に
+除外すること。現状は同梱される。
