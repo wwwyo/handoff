@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from '../../src/core/events'
 import { AnchorTracker } from '../../src/anchoring/tracker'
+import { createTextQuote } from '../../src/anchoring/text-quote'
 import type { Comment } from '../../src/core/types'
 
 function makeComment(id: string): Comment {
@@ -148,6 +149,55 @@ describe('AnchorTracker', () => {
     // 残骸がある実装だと previous='viewport' として比較され、誤って anchor:recovered が飛ぶ。
     expect(degraded).not.toHaveBeenCalled()
     expect(recovered).not.toHaveBeenCalled()
+  })
+
+  it('revalidate=true で selector が死んでいる（id 剥がし）ときはラベルが selector のまま残らない', () => {
+    document.body.innerHTML = '<div id="a">unique original text</div>'
+    const comments = [makeComment('a')]
+    comments[0]!.anchor.textQuote = { exact: 'unique original text' }
+    const events = new EventEmitter()
+    const degraded = vi.fn()
+    events.on('anchor:degraded', degraded)
+    const tracker = new AnchorTracker({ getComments: () => comments }, events, () => {})
+
+    tracker.update() // 1回目: selector '#a' が一意に一致するので 'selector' としてキャッシュする
+
+    // id 属性だけを剥がす。ノードは同じままなので isConnected は真、textContent も変わらない
+    document.getElementById('a')!.removeAttribute('id')
+
+    tracker.update(true) // revalidate=true: selector はもう一致しないのでラベルを付け直すはず
+
+    // 'selector' のまま残ると anchor:degraded が発火せず、UI の「見失った」通知が機能しない
+    expect(degraded).toHaveBeenCalledTimes(1)
+    expect(degraded.mock.calls[0]?.[0].resolution).toBe('text-quote')
+  })
+
+  it('兄弟要素の挿入で prefix が変わっても、キャッシュ済み要素が exact + tagName に合致する限り手放さない', () => {
+    document.body.innerHTML = '<div><span>元の直前兄弟</span><p id="a">本文</p></div>'
+    const target = document.getElementById('a')!
+    const quote = createTextQuote(target)!
+    expect(quote.prefix).toContain('元の直前兄弟')
+
+    const comments = [makeComment('a')]
+    comments[0]!.anchor.textQuote = quote
+    const tracker = new AnchorTracker({ getComments: () => comments }, new EventEmitter(), () => {})
+
+    tracker.update() // 1回目: selector '#a' で解決してキャッシュする
+
+    // #a の直前に無関係な段落を挿入する。直前兄弟が変わるので prefix は変わるが、
+    // #a 自体の exact（textContent）・tagName は変わっていない。
+    const inserted = document.createElement('p')
+    inserted.textContent = '後から挿入された無関係な段落'
+    target.before(inserted)
+
+    const querySpy = vi.spyOn(document, 'querySelectorAll')
+    tracker.update(true) // revalidate=true でも exact + tagName ベースの検証は通るはず
+
+    // prefix まで検証条件に含めていれば、変化を検知してキャッシュを無効化し
+    // resolveAnchorWithElement 経由で anchor.selector が再クエリされるはず。
+    // それが起きていないことが、正しい要素を手放さなかったことの証拠になる。
+    expect(querySpy).not.toHaveBeenCalledWith(comments[0]!.anchor.selector)
+    querySpy.mockRestore()
   })
 
   it('revalidate=true でもキャッシュ要素が selector/textQuote に合致し続ける限りは解決し直さない', () => {

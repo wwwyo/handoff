@@ -1,7 +1,7 @@
 import type { Anchor, Comment, Resolution } from '../core/types'
 import type { EventEmitter } from '../core/events'
 import { resolveAnchorWithElement, resolveFromElement } from './position'
-import { textQuoteMatches } from './text-quote'
+import { verifyTextQuote } from './text-quote'
 
 export interface TrackedPosition {
   id: string
@@ -114,7 +114,16 @@ export class AnchorTracker {
     const cached = this.resolvedElements.get(comment.id)?.deref()
 
     if (cached?.isConnected && (!revalidate || this.stillValid(cached, comment.anchor))) {
-      const resolution = this.lastResolution.get(comment.id) ?? 'selector'
+      // revalidate=true（ホストが refresh() を呼んだ = 「DOM の意味が変わった」明示的な合図）
+      // のときだけラベルを作り直す。selector 属性が剥がれるなど「要素の追跡自体は継続して
+      // いるが、もう selector 経由では説明できない」ケースでも前回ラベルの 'selector' を
+      // 名乗り続けると、UI の「見失った」表示や anchor:degraded が発火せず劣化がユーザーに
+      // 伝わらない。revalidate=false（scroll/resize の追従）では前回ラベルをそのまま使い、
+      // 毎フレームの再判定でキャッシュの意味（レイアウトスラッシング回避）を壊さない。
+      const resolution = revalidate
+        ? this.classifyResolution(cached, comment.anchor)
+        : (this.lastResolution.get(comment.id) ?? 'selector')
+      this.lastResolution.set(comment.id, resolution)
       const result = resolveFromElement(cached, comment.anchor, resolution)
       return { id: comment.id, x: result.x, y: result.y, resolution: result.resolution, visible: result.visible }
     }
@@ -138,13 +147,39 @@ export class AnchorTracker {
    */
   private stillValid(cached: Element, anchor: Anchor): boolean {
     if (anchor.textQuote) {
-      return textQuoteMatches(cached, anchor.textQuote)
+      return verifyTextQuote(cached, anchor.textQuote)
     }
     try {
       return Array.from(document.querySelectorAll(anchor.selector)).includes(cached)
     } catch {
       return false
     }
+  }
+
+  /**
+   * revalidate 時に、キャッシュ済み要素が今どの層で説明できるかを判定してラベルを付け直す。
+   *
+   * `Element.matches` を使い `document.querySelectorAll` は呼ばない — 全文書を再走査せず
+   * 対象要素 1 つだけを見て済ませることで、revalidate のたびにレイアウトスラッシングの
+   * 原因となる全文書クエリを発生させない（scroll/resize 追従用のキャッシュ戦略と整合させる）。
+   * これは「selector が一意に絞れているか」までは見ないという意味でもあり、その分の精度は
+   * 「selector 属性が剥がれた等で、もう selector 経路では一切説明できない」ケースを
+   * 確実に検出できることとのトレードオフとして許容する。
+   */
+  private classifyResolution(cached: Element, anchor: Anchor): Resolution {
+    const stillMatchesSelector = (() => {
+      if (!anchor.selector) return false
+      try {
+        return cached.matches(anchor.selector)
+      } catch {
+        return false
+      }
+    })()
+    if (stillMatchesSelector) return 'selector'
+    if (anchor.textQuote && verifyTextQuote(cached, anchor.textQuote)) return 'text-quote'
+    // stillValid が真である前提で呼ばれるため、ここには到達しないはずだが、
+    // 型/防御的に selector 側へフォールバックしておく。
+    return 'selector'
   }
 
   /**
