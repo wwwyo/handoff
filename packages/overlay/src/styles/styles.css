@@ -456,6 +456,12 @@
   border-top: 1px solid var(--handoff-border);
 }
 
+/* 新規コメント入力では上に本文も返信も無く、区切る相手がいない。
+   popover 用の rule を composer が流用しているので、ここで打ち消す。 */
+.handoff-new-comment-box .handoff-popover-reply-area {
+  border-top: none;
+}
+
 .handoff-popover-reply-area .handoff-popover-avatar-small {
   margin-top: 2px;
 }
