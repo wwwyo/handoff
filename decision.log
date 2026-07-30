@@ -8,6 +8,70 @@
 
 ---
 
+## 2026-07-30 Copilot 指摘の4件を修正: GET/DELETE の unhandled rejection、backend 障害と入力エラーの取り違え、`limit` 無上限、`PostgresBackend.create()` の非トランザクション
+
+PR #2 のレビューで見つかった4件を実バグとして直した。
+
+1. **`GET /comments` / `DELETE /comments/:id` に try/catch が無かった**: 他の
+   ハンドラ（POST/PATCH/replies）は body 読み取りの失敗を try/catch していたが、
+   この2つは backend 呼び出し自体を素通ししていた。ハンドラは全て
+   `void (async () => {...})()` という fire-and-forget IIFE で書かれており、
+   何も await していないため、catch が無いと `backend.list()` /
+   `backend.delete()` の reject がそのまま unhandled rejection になり、
+   クライアントには応答が返らないまま繋ぎっぱなしになる（テストでは
+   `hookTimeout` に達して落ちることを確認した）。両方に try/catch を足し、
+   backend 起因の失敗は 500 を返すようにした。
+2. **backend 障害と入力エラーを同じ 400 で返していた**: `POST /comments` /
+   `PATCH /comments/:id` / `POST /comments/:id/replies` の catch 節が、
+   「body のパース失敗（400/413）」と「backend.create()/update()/addReply() が
+   reject（本来 500）」を区別せず、後者も 400 にしていた。3つとも、
+   body の読み取り・検証と backend 呼び出しを別の try/catch に分け、
+   後者の catch は無条件で 500 を返すようにした。
+3. **`GET /comments` の `limit` に上限が無かった**: 正の整数であることしか
+   検証しておらず、`limit=1000000` のような値をそのまま backend に渡していた。
+   `MAX_LIST_LIMIT`（`server.ts`。値は 200）を追加し、超過分は **400 にせず
+   clamp（黙って上限に丸める）** ことにした。理由: 既存の rate limit
+   （`RateLimiter`）が「超過は弾いて終わり」ではなく「緩和で対応する」設計に
+   寄っているのと同じ考え方で、`limit` も呼び出し側に「上限を知って作り直せ」
+   と強制するより、単に少なく返す方が後方互換になる。200 という値は Postgres
+   実装の既定 `DEFAULT_LIST_LIMIT`（50）の4倍で、通常のページングより余裕を
+   持たせつつ無制限にはしない、という目安（厳密な計測に基づく数字ではない）。
+4. **`PostgresBackend.create()` がトランザクションを張っていなかった**:
+   コメント本体の insert と各 reply の insert が別クエリのままで、reply の
+   insert が途中で失敗するとコメント行だけコミット済みで残る。呼び出し側が
+   リトライすると `on conflict do nothing` で「既に存在する」扱いになり、
+   コメントはあるのに replies が永久に欠ける。`addReply`（同ファイル内）が
+   既にやっている `begin` → 各クエリ → `commit`、失敗時は `rollback` して
+   rethrow、という形に揃えた。`on conflict do nothing` で行が返らない
+   （id 衝突）ケースは、何も挿入されていないので rollback でも commit でも
+   結果は同じだが、「このトランザクションで実際に変更が起きたか」を意図的に
+   区別するため rollback にした。
+
+**この4番目の修正は `CommentBackend` の契約（`src/backend/types.ts` の
+「実装が満たさなくてよいこと: トランザクション」、`.agent/design/remote-handoff.md`
+「トランザクションを約束しない」節）と矛盾しない。** 契約が言っているのは
+「GitHub にトランザクションが無い以上、契約としてトランザクションを *要求*
+しない（GitHub 実装が契約違反にならないようにする）」ということであり、
+「Postgres 実装が自分の内部実装としてトランザクションを *使ってはいけない*」
+ではない。`PostgresBackend.create()` が自分の呼び出し1回をアトミックにする
+ために内部で `begin`/`commit`/`rollback` を使うのは実装詳細の選択であり、
+差し替え可能性（契約が守っているもの）を損なわない。後日、契約に「実装は
+トランザクションを持ってはいけない」という誤読で戻される事故を防ぐために
+明記しておく。
+
+合わせて、返信（`reply.text`）もコメント本文と同じ認証なしの経路
+（`POST /comments/:id/replies`）から来る untrusted な入力であるにもかかわらず
+`comments-format.ts` が `wrapUntrustedText()` をコメント本文にしか適用して
+いなかった穴も塞いだ（`formatCommentsJson` / `formatCommentsText` の両方で
+`reply.text` を `wrapUntrustedText()` で囲み、JSON 側は `trust: 'untrusted'`
+も付けた）。第三者が返信側にだけ injection を仕込めば無検証で出力されて
+いたため、これも実バグとして扱った。
+
+**捨てたもの**: `limit` 超過を 400 で拒否する案（呼び出し側の作り直しを
+強制する分、「実際は無かった上限を知らずに 500 件返ってくると思い込んで
+組んだページング」を早期に気づかせられるが、既存の緩和寄りの設計との
+一貫性を優先した）。
+
 ## 2026-07-30 `CommentBackend` 契約: `Comment | null` / `{ comments, nextCursor }` を `StoredComment` ベースへ変え、`github`/`postgres` の配線も済ませた
 
 一度「凍結」した `CommentBackend`（`src/backend/types.ts`）の契約を、凍結後にもう一段

@@ -240,20 +240,56 @@ export function createPostgresBackend(options: PostgresBackendOptions): CommentB
   }
 
   return {
+    /**
+     * コメント本体と replies（export/import 由来などで非空のこともある）を
+     * 1トランザクションで書く。
+     *
+     * Why: 以前は `pool.query` を複数回呼ぶだけで、コメントの insert と各 reply の
+     * insert がそれぞれ別のコネクション/文になっていた。途中の reply insert が
+     * 失敗すると、コメント行はすでにコミット済みのまま `create()` 全体が例外を
+     * 投げる。呼び出し側がリトライすると `on conflict do nothing` で「既に存在する」
+     * 扱いになり、409 を返すのに replies は永久に欠けたままになる（コメントは
+     * あるのに返信が消える）。`addReply`（このファイル内）が既に begin/commit/
+     * rollback で自分の呼び出しをアトミックにしているのと同じ形に揃えた。
+     *
+     * **これは `CommentBackend` 契約に矛盾しない**（decision.log 参照）。契約
+     * （`./types.ts` 「実装が満たさなくてよいこと」節、`.agent/design/remote-handoff.md`
+     * 「トランザクションを約束しない」節）が言っているのは「GitHub 実装は
+     * トランザクションを持てないので、backend 間でトランザクションの保証を
+     * *契約として要求しない*」ということであり、「Postgres 実装が自分の内部
+     * 実装としてトランザクションを使ってはいけない」ではない。`PostgresBackend`
+     * が自分の `create()` 1回をアトミックにするために内部で `begin/commit/rollback`
+     * を使うのは実装詳細の選択であり、契約を破っていない。
+     */
     async create({ comment, pageUrl }): Promise<CreateResult> {
-      const { text, values } = buildInsertCommentQuery(commentsTable, comment, pageUrl)
-      const { rows } = await pool.query(text, values)
-      const row = rows[0] as CommentRow | undefined
-      if (!row) return { created: false, reason: 'conflict' }
+      const client = await pool.connect()
+      try {
+        await client.query('begin')
+        const { text, values } = buildInsertCommentQuery(commentsTable, comment, pageUrl)
+        const { rows } = await client.query(text, values)
+        const row = rows[0] as CommentRow | undefined
+        if (!row) {
+          // 既存 id との衝突（`on conflict do nothing` で行が返らない）。何も
+          // 挿入されていないので rollback でも commit でも結果は同じだが、
+          // 「このトランザクションで実際に変更が起きたか」を意図的に区別するため
+          // rollback にする（commit だと「変更を確定した」という誤った意味になる）。
+          await client.query('rollback')
+          return { created: false, reason: 'conflict' }
+        }
 
-      // 呼び出し側が非空の replies を積んで渡してきた場合（export/import 由来など）に
-      // 備え、コメント本体と一緒に replies テーブルへも書き込む。
-      for (const reply of comment.replies) {
-        const insertReply = buildInsertReplyQuery(repliesTable, comment.id, reply)
-        await pool.query(insertReply.text, insertReply.values)
+        for (const reply of comment.replies) {
+          const insertReply = buildInsertReplyQuery(repliesTable, comment.id, reply)
+          await client.query(insertReply.text, insertReply.values)
+        }
+
+        await client.query('commit')
+        return { created: true, stored: rowToStoredComment(row, comment.replies) }
+      } catch (error) {
+        await client.query('rollback')
+        throw error
+      } finally {
+        client.release()
       }
-
-      return { created: true, stored: rowToStoredComment(row, comment.replies) }
     },
 
     async update(id, patch): Promise<StoredComment | null> {
