@@ -55,6 +55,8 @@ pnpm install
 - **永続化は最小 interface に閉じる**: `{ load(), save() }` のみ。localStorage / HTTP / bridge はすべてその実装として差し替わる
 - **書き込みは差分で、まとめて**: 全件シリアライズを毎操作で走らせない。debounce と差分適用を前提にする
 
+- 実装時の非自明な correctness・security の学びは `.agents/skills/coding/`（session-retro が維持）を参照
+
 ## bridge と Claude Code の接続
 
 bridge はブラウザからのコメントを受け取り、Claude Code の **channel**（research preview）として実行中セッションのコンテキストへ push する。channel は Claude 側からの tool 呼び出しを必要とせず、MCP notification でそのまま流し込める。
