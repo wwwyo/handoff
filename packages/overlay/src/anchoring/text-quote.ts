@@ -55,15 +55,20 @@ function depthOf(el: Element): number {
 }
 
 /**
- * 要素の現在の状態が quote と一致するか（exact / tagName / prefix・suffix 文脈）を判定する。
- * tracker.ts がキャッシュ済み要素の再検証に使う。「同じノードだが中身だけ差し替わった」
- * ケースを検出するには selector 一致だけでは不十分で、textContent まで見る必要がある。
+ * 要素が今も quote の指す対象だと言えるかの「検証」（exact / tagName のみ）。
+ * tracker.ts のキャッシュ再検証、position.ts の selector 複数一致の絞り込みから使う。
+ *
+ * Why not prefix/suffix: prefix/suffix は「同じ exact が複数あるときにどれを選ぶか」を
+ * 決めるための絞り込み情報であって、「この要素がまだ正しいか」の検証条件ではない。
+ * 検証にまで含めると、無関係な兄弟要素の挿入・削除だけで prefix/suffix が変わり、
+ * 中身が変わっていない正しい要素を誤って手放してしまう（実機で確認したバグ）。
+ * 絞り込み用途は findByTextQuote 内の matchesContext に閉じる。
  */
-export function textQuoteMatches(el: Element, quote: TextQuote): boolean {
+export function verifyTextQuote(el: Element, quote: TextQuote): boolean {
   const text = normalizeText(el.textContent ?? '')
   if (!text.includes(quote.exact)) return false
   if (quote.tagName && el.tagName.toLowerCase() !== quote.tagName) return false
-  return matchesContext(el, quote)
+  return true
 }
 
 /**
