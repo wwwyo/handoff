@@ -5,9 +5,10 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
-import type { Comment } from '@wwwyo/handoff/types'
+import type { Comment, Reply } from '@wwwyo/handoff/types'
 import { InMemoryBackend } from '../src/backend/memory.js'
-import { createServer } from '../src/server.js'
+import type { CommentBackend, CommentPatch, CreateResult, ListQuery, ListResult, StoredComment } from '../src/backend/types.js'
+import { createServer, MAX_LIST_LIMIT } from '../src/server.js'
 
 const TOKEN = 'test-token'
 const PAGE_URL = 'http://localhost:5173/page-a'
@@ -497,5 +498,132 @@ describe('server (rate limit)', () => {
     } finally {
       await new Promise<void>((resolve) => httpServer.close(() => resolve()))
     }
+  })
+})
+
+/**
+ * What: `backend.list()` / `backend.delete()` が reject したときに、応答が 500 に
+ * なること（fix 1, 2）を検証する。この2つのハンドラは修正前は try/catch を持たず、
+ * `void (async () => {...})()` が reject を握ったまま何も待たないため
+ * unhandled rejection になっていた（応答が返らずコネクションが宙に浮く）。
+ * `CommentBackend` を満たす最小限のフェイクを使い、対象メソッドだけ reject させる。
+ */
+class RejectingBackend implements CommentBackend {
+  async create(_input: { comment: Comment; pageUrl: string }): Promise<CreateResult> {
+    throw new Error('not implemented in this fake')
+  }
+  async update(_id: string, _patch: CommentPatch): Promise<StoredComment | null> {
+    throw new Error('not implemented in this fake')
+  }
+  async delete(_id: string): Promise<boolean> {
+    throw new Error('backend.delete() が壊れている想定の fake エラー')
+  }
+  async addReply(_commentId: string, _reply: Reply): Promise<StoredComment | null> {
+    throw new Error('not implemented in this fake')
+  }
+  async get(_id: string): Promise<StoredComment | null> {
+    throw new Error('not implemented in this fake')
+  }
+  async list(_query: ListQuery): Promise<ListResult> {
+    throw new Error('backend.list() が壊れている想定の fake エラー')
+  }
+}
+
+describe('server (backend 障害時のハンドリング)', () => {
+  let httpServer: Server
+  let baseUrl: string
+
+  beforeEach(async () => {
+    const backend = new RejectingBackend()
+    httpServer = createServer({ backend, token: TOKEN, allowedOrigins: ['http://localhost:*'] })
+    await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
+    const { port } = httpServer.address() as AddressInfo
+    baseUrl = `http://127.0.0.1:${port}`
+  })
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()))
+  })
+
+  it('backend.list() が reject すると GET /comments は 500 になる（unhandled rejection にならない）', async () => {
+    const res = await fetch(`${baseUrl}/comments`, {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    })
+    expect(res.status).toBe(500)
+  })
+
+  it('backend.delete() が reject すると DELETE /comments/:id は 500 になる（unhandled rejection にならない）', async () => {
+    const res = await fetch(`${baseUrl}/comments/c1`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    })
+    expect(res.status).toBe(500)
+  })
+
+  it('backend.create() が reject すると POST /comments は 400 ではなく 500 になる', async () => {
+    const res = await fetch(`${baseUrl}/comments`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ comment: makeComment(), url: PAGE_URL }),
+    })
+    expect(res.status).toBe(500)
+  })
+})
+
+/**
+ * What: `limit` の上限（`MAX_LIST_LIMIT`）検証（fix 1, 2 の一部）。上限超過は
+ * 400 ではなく clamp（黙って上限に丸める）を選んだ（理由は server.ts の
+ * `MAX_LIST_LIMIT` doc comment 参照）。
+ */
+describe('server (GET /comments limit の上限)', () => {
+  let httpServer: Server
+  let baseUrl: string
+
+  beforeEach(async () => {
+    const backend = new InMemoryBackend()
+    // 既定の rate limit（60 req/window）だと、以下で MAX_LIST_LIMIT 超の件数分
+    // POST するだけで 429 に当たってしまう。この describe は rate limit ではなく
+    // limit の上限 clamp を見たいので、緩めた値を明示的に渡す。
+    httpServer = createServer({
+      backend,
+      token: TOKEN,
+      allowedOrigins: ['http://localhost:*'],
+      rateLimit: { windowMs: 60_000, max: MAX_LIST_LIMIT + 100 },
+    })
+    await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
+    const { port } = httpServer.address() as AddressInfo
+    baseUrl = `http://127.0.0.1:${port}`
+
+    // MAX_LIST_LIMIT を超える件数のコメントを積んでおく。
+    for (let i = 0; i < MAX_LIST_LIMIT + 5; i++) {
+      await fetch(`${baseUrl}/comments`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comment: makeComment({ id: `c${i}` }), url: PAGE_URL }),
+      })
+    }
+  })
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()))
+  })
+
+  it('MAX_LIST_LIMIT を超える limit を指定しても、返る件数は MAX_LIST_LIMIT に丸められる', async () => {
+    const res = await fetch(`${baseUrl}/comments?limit=${MAX_LIST_LIMIT + 100}`, {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { comments: Comment[]; nextCursor?: string }
+    expect(body.comments).toHaveLength(MAX_LIST_LIMIT)
+    // まだ丸め上限を超えた分が残っているので、続きがあることを示す nextCursor が付く。
+    expect(body.nextCursor).toBeDefined()
+  })
+
+  it('MAX_LIST_LIMIT 以下の limit はそのまま尊重される', async () => {
+    const res = await fetch(`${baseUrl}/comments?limit=3`, {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    })
+    const body = (await res.json()) as { comments: Comment[] }
+    expect(body.comments).toHaveLength(3)
   })
 })

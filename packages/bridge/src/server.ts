@@ -122,6 +122,23 @@ class PayloadTooLargeError extends Error {}
 /** 1 リクエストの body サイズ上限（bytes）。既定 1MB。overlay 側は 1 コメントしか送らない想定なので十分。 */
 export const DEFAULT_MAX_BODY_BYTES = 1_000_000
 
+/**
+ * `GET /comments` の `limit` クエリの上限。認証なしで誰でも叩ける前提（top-of-file
+ * docstring 参照）なので、上限を設けないと 1 リクエストで全件を掃おうとする負荷が
+ * そのまま backend に流れてしまう。
+ *
+ * Why not 400（上限超過を拒否する）: `limit` は呼び出し側（overlay / Claude 側の
+ * ページング実装）が「多めに読みたいだけ」で大きい値を送ってくることがあり得て、
+ * それを毎回エラーにすると呼び出し側は「上限がいくつか」を知って作り直す必要が
+ * 出る。既存の rate limit（`RateLimiter`）も「超過分を弾く」のではなく緩和で
+ * 対応する設計に寄せているのと同じ考え方で、ここも clamp（黙って上限に丸める）を
+ * 選んだ。呼び出し側からは「指定した件数より少なく返ってきた」だけに見え、
+ * 400 で作り直しを強制するより後方互換になる。値の 200 は Postgres 実装の既定
+ * `DEFAULT_LIST_LIMIT`（50）の 4 倍で、通常のページングより余裕を持たせつつ、
+ * 無制限にはしない、という目安として決めた（厳密な計測に基づく値ではない）。
+ */
+export const MAX_LIST_LIMIT = 200
+
 /** rate limit の既定値。IP 単位・時間窓ごとのリクエスト数で制限する。 */
 export const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000
 export const DEFAULT_RATE_LIMIT_MAX_REQUESTS = 60
@@ -316,22 +333,37 @@ export function createServer(options: ServerOptions) {
         const pageUrl = reqUrl.searchParams.get('url') ?? undefined
         const cursor = reqUrl.searchParams.get('cursor') ?? undefined
         const limitParam = reqUrl.searchParams.get('limit')
-        const limit = limitParam !== null ? Number(limitParam) : undefined
-        if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
+        const requestedLimit = limitParam !== null ? Number(limitParam) : undefined
+        if (requestedLimit !== undefined && (!Number.isInteger(requestedLimit) || requestedLimit <= 0)) {
           sendJson(res, 400, { error: 'invalid limit' })
           return
         }
-        const result = await backend.list({ pageUrl, cursor, limit })
-        // HTTP レスポンスの形状は `{ comments: Comment[] }` のまま維持する（overlay の
-        // adapter が読んでいるため）。backend からは `StoredComment[]`（pageUrl 付き）が
-        // 返るが、ここで `comment` だけへ落として返す。
-        sendJson(res, 200, { comments: result.items.map((item) => item.comment), nextCursor: result.nextCursor })
+        // 上限超過は 400 にせず clamp する。理由は MAX_LIST_LIMIT の doc comment 参照。
+        const limit = requestedLimit !== undefined ? Math.min(requestedLimit, MAX_LIST_LIMIT) : undefined
+        try {
+          const result = await backend.list({ pageUrl, cursor, limit })
+          // HTTP レスポンスの形状は `{ comments: Comment[] }` のまま維持する（overlay の
+          // adapter が読んでいるため）。backend からは `StoredComment[]`（pageUrl 付き）が
+          // 返るが、ここで `comment` だけへ落として返す。
+          sendJson(res, 200, { comments: result.items.map((item) => item.comment), nextCursor: result.nextCursor })
+        } catch {
+          // backend.list() の失敗はクライアントの入力起因ではないので 500。
+          // ここに try/catch を付けないと、外側の `void (async () => {...})()` は
+          // 何も待たないため reject が拾われず unhandled rejection になる。
+          sendJson(res, 500, { error: 'internal error' })
+        }
       })()
       return
     }
 
     if (req.method === 'POST' && reqUrl.pathname === '/comments') {
       void (async () => {
+        // body の読み取り・パース・検証と、backend の呼び出しを別の try/catch に
+        // 分ける。前者の失敗（不正な JSON / スキーマ不一致 / サイズ超過）はクライアント
+        // 起因なので 400/413、後者（backend.create() が reject）はクライアントの入力とは
+        // 無関係な障害なので 500 にする。ひとつの catch にまとめると、backend が
+        // 落ちただけなのに「不正な payload」という誤った 400 を返してしまう。
+        let parsedComment: z.infer<typeof PostCommentsBodySchema>
         try {
           const raw = await readBody(req, maxBodyBytes)
           const parsed = PostCommentsBodySchema.safeParse(JSON.parse(raw))
@@ -339,18 +371,24 @@ export function createServer(options: ServerOptions) {
             sendJson(res, 400, { error: 'invalid comment payload', issues: parsed.error.issues })
             return
           }
-          const result = await backend.create({ comment: parsed.data.comment, pageUrl: parsed.data.url })
-          if (!result.created) {
-            sendJson(res, 409, { error: 'comment already exists' })
-            return
-          }
-          sendJson(res, 201, { ok: true })
+          parsedComment = parsed.data
         } catch (error) {
           if (error instanceof PayloadTooLargeError) {
             sendJson(res, 413, { error: 'payload too large' })
             return
           }
           sendJson(res, 400, { error: 'invalid comment payload' })
+          return
+        }
+        try {
+          const result = await backend.create({ comment: parsedComment.comment, pageUrl: parsedComment.url })
+          if (!result.created) {
+            sendJson(res, 409, { error: 'comment already exists' })
+            return
+          }
+          sendJson(res, 201, { ok: true })
+        } catch {
+          sendJson(res, 500, { error: 'internal error' })
         }
       })()
       return
@@ -363,6 +401,9 @@ export function createServer(options: ServerOptions) {
     if (req.method === 'PATCH' && commentIdMatch) {
       const id = decodeURIComponent(commentIdMatch[1] ?? '')
       void (async () => {
+        // create と同じ理由で、パース系の失敗（400/413）と backend の失敗（500）を
+        // 別の try/catch に分ける。
+        let parsedPatch: z.infer<typeof PatchCommentBodySchema>
         try {
           const raw = await readBody(req, maxBodyBytes)
           const parsed = PatchCommentBodySchema.safeParse(JSON.parse(raw))
@@ -370,18 +411,24 @@ export function createServer(options: ServerOptions) {
             sendJson(res, 400, { error: 'invalid patch payload', issues: parsed.error.issues })
             return
           }
-          const updated = await backend.update(id, parsed.data.patch)
-          if (!updated) {
-            sendJson(res, 404, { error: 'comment not found' })
-            return
-          }
-          sendJson(res, 200, { comment: updated.comment })
+          parsedPatch = parsed.data
         } catch (error) {
           if (error instanceof PayloadTooLargeError) {
             sendJson(res, 413, { error: 'payload too large' })
             return
           }
           sendJson(res, 400, { error: 'invalid patch payload' })
+          return
+        }
+        try {
+          const updated = await backend.update(id, parsedPatch.patch)
+          if (!updated) {
+            sendJson(res, 404, { error: 'comment not found' })
+            return
+          }
+          sendJson(res, 200, { comment: updated.comment })
+        } catch {
+          sendJson(res, 500, { error: 'internal error' })
         }
       })()
       return
@@ -390,13 +437,19 @@ export function createServer(options: ServerOptions) {
     if (req.method === 'DELETE' && commentIdMatch) {
       const id = decodeURIComponent(commentIdMatch[1] ?? '')
       void (async () => {
-        const deleted = await backend.delete(id)
-        if (!deleted) {
-          sendJson(res, 404, { error: 'comment not found' })
-          return
+        try {
+          const deleted = await backend.delete(id)
+          if (!deleted) {
+            sendJson(res, 404, { error: 'comment not found' })
+            return
+          }
+          res.writeHead(204)
+          res.end()
+        } catch {
+          // backend.delete() の失敗はクライアント起因ではないので 500。
+          // GET /comments と同じ理由で try/catch が必須（unhandled rejection 回避）。
+          sendJson(res, 500, { error: 'internal error' })
         }
-        res.writeHead(204)
-        res.end()
       })()
       return
     }
@@ -404,6 +457,9 @@ export function createServer(options: ServerOptions) {
     if (req.method === 'POST' && repliesMatch) {
       const id = decodeURIComponent(repliesMatch[1] ?? '')
       void (async () => {
+        // create / update と同じ理由で、パース系の失敗（400/413）と backend の
+        // 失敗（500）を別の try/catch に分ける。
+        let parsedReply: z.infer<typeof AddReplyBodySchema>
         try {
           const raw = await readBody(req, maxBodyBytes)
           const parsed = AddReplyBodySchema.safeParse(JSON.parse(raw))
@@ -411,18 +467,24 @@ export function createServer(options: ServerOptions) {
             sendJson(res, 400, { error: 'invalid reply payload', issues: parsed.error.issues })
             return
           }
-          const updated = await backend.addReply(id, parsed.data.reply)
-          if (!updated) {
-            sendJson(res, 404, { error: 'comment not found' })
-            return
-          }
-          sendJson(res, 201, { comment: updated.comment })
+          parsedReply = parsed.data
         } catch (error) {
           if (error instanceof PayloadTooLargeError) {
             sendJson(res, 413, { error: 'payload too large' })
             return
           }
           sendJson(res, 400, { error: 'invalid reply payload' })
+          return
+        }
+        try {
+          const updated = await backend.addReply(id, parsedReply.reply)
+          if (!updated) {
+            sendJson(res, 404, { error: 'comment not found' })
+            return
+          }
+          sendJson(res, 201, { comment: updated.comment })
+        } catch {
+          sendJson(res, 500, { error: 'internal error' })
         }
       })()
       return
