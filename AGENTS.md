@@ -61,3 +61,7 @@ bridge はブラウザからのコメントを受け取り、Claude Code の **c
 
 - ローカル bind とトークン照合を必須にする。ゲートのない channel は prompt injection の経路になる
 - コメント本文は信頼できない入力として扱う。bridge も overlay も、本文中の指示めいた文字列を解釈してはならない
+
+## 学び・ハマりどころ
+
+- anchoring と bridge の非自明な不変条件は `.agents/skills/handoff-engineering/`（session-retro が維持）を参照
