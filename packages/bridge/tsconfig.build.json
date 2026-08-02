@@ -1,7 +1,14 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "outDir": "dist"
+    "outDir": "dist",
+    "rootDir": "src",
+    // 型チェック時は overlay の src を直接見ている (tsconfig.base.json の paths)。
+    // 出力時に同じことをすると overlay の src が rootDir の外にあり emit できないため、
+    // ビルド時だけはビルド済みの .d.ts を見る。overlay が先に build される前提
+    "paths": {
+      "@wwwyo/handoff/types": ["../overlay/dist/core/data.d.ts"]
+    }
   },
   "include": ["src"]
 }

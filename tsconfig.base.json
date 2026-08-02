@@ -14,6 +14,12 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "declaration": true,
-    "sourceMap": true
+    "sourceMap": true,
+    // paths は baseUrl 無しでこのファイル基準に解決される (TS 7 で baseUrl は削除された)。
+    // dist をビルドしなくても型が解決できるようにするため、src を直接指す
+    "paths": {
+      "@wwwyo/handoff": ["./packages/overlay/src/index.ts"],
+      "@wwwyo/handoff/types": ["./packages/overlay/src/core/data.ts"]
+    }
   }
 }

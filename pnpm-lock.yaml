@@ -36,7 +36,17 @@ importers:
         specifier: workspace:*
         version: link:../../packages/overlay
 
-  packages/bridge: {}
+  packages/bridge:
+    dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: 1.29.0
+        version: 1.29.0(zod@4.1.13)
+      '@wwwyo/handoff':
+        specifier: workspace:*
+        version: link:../overlay
+      zod:
+        specifier: 4.1.13
+        version: 4.1.13
 
   packages/overlay: {}
 
@@ -1148,6 +1158,9 @@ packages:
     peerDependencies:
       zod: ^3.25.28 || ^4
 
+  zod@4.1.13:
+    resolution: {integrity: sha512-AvvthqfqrAhNH9dnfmrfKzX5upOdjUVJYFqNSlkmGf64gRaTzlPwz99IHYnVs28qYAybvAlBV+H7pn0saFY4Ig==}
+
   zod@4.4.3:
     resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
 
@@ -1224,6 +1237,28 @@ snapshots:
       hono: 4.12.31
 
   '@jridgewell/sourcemap-codec@1.5.5': {}
+
+  '@modelcontextprotocol/sdk@1.29.0(zod@4.1.13)':
+    dependencies:
+      '@hono/node-server': 1.19.14(hono@4.12.31)
+      ajv: 8.20.0
+      ajv-formats: 3.0.1(ajv@8.20.0)
+      content-type: 1.0.5
+      cors: 2.8.6
+      cross-spawn: 7.0.6
+      eventsource: 3.0.7
+      eventsource-parser: 3.1.0
+      express: 5.2.1
+      express-rate-limit: 8.6.0(express@5.2.1)
+      hono: 4.12.31
+      jose: 6.2.3
+      json-schema-typed: 8.0.2
+      pkce-challenge: 5.0.1
+      raw-body: 3.0.2
+      zod: 4.1.13
+      zod-to-json-schema: 3.25.2(zod@4.1.13)
+    transitivePeerDependencies:
+      - supports-color
 
   '@modelcontextprotocol/sdk@1.29.0(zod@4.4.3)':
     dependencies:
@@ -2118,8 +2153,14 @@ snapshots:
 
   xmlchars@2.2.0: {}
 
+  zod-to-json-schema@3.25.2(zod@4.1.13):
+    dependencies:
+      zod: 4.1.13
+
   zod-to-json-schema@3.25.2(zod@4.4.3):
     dependencies:
       zod: 4.4.3
+
+  zod@4.1.13: {}
 
   zod@4.4.3: {}

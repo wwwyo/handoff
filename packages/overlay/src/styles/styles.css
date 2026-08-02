@@ -1,0 +1,1259 @@
+/* handoff overlay — Shadow DOM 内でのみ有効なスタイル。
+ * ここで定義する値は styles/tokens.ts の定数と対応させておく。 */
+
+:host {
+  /* Typography scale */
+  --handoff-text-lg: 16px;
+  --handoff-text-base: 13px;
+  --handoff-text-sm: 12px;
+  --handoff-text-xs: 11px;
+  --handoff-text-2xs: 10px;
+
+  --handoff-line-lg: 24px;
+  --handoff-line-md: 22px;
+  --handoff-line-base: 20px;
+  --handoff-line-xs: 16px;
+
+  --handoff-avatar-size: 24px;
+
+  /* Typography scale */
+  --handoff-text-lg: 16px;
+  --handoff-text-base: 13px;
+  --handoff-text-sm: 12px;
+  --handoff-text-xs: 11px;
+  --handoff-text-2xs: 10px;
+
+  --handoff-line-lg: 24px;
+  --handoff-line-md: 22px;
+  --handoff-line-base: 20px;
+  --handoff-line-xs: 16px;
+
+  --handoff-pin-color: #0d99ff;
+  --handoff-pin-resolved: #b3b3b3;
+  --handoff-bg: #ffffff;
+  --handoff-bg-secondary: #f5f5f5;
+  --handoff-text: rgba(0, 0, 0, 0.9);
+  /* rgba(0,0,0,0.5) は白背景で 3.95:1 と WCAG AA(4.5:1) 未達だった実測値を受けての調整。
+     0.6 で白背景に対し 5.74:1(#0d99ff 等ブランド色と違い純粋なグレーなので計算がぶれない)。 */
+  --handoff-text-secondary: rgba(0, 0, 0, 0.6);
+  --handoff-text-tertiary: rgba(0, 0, 0, 0.3);
+  --handoff-border: #e6e6e6;
+  --handoff-font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  --handoff-radius: 13px;
+  --handoff-radius-small: 2px;
+  --handoff-shadow: 0 0 0.5px rgba(0, 0, 0, 0.12), 0 10px 16px rgba(0, 0, 0, 0.12), 0 2px 5px rgba(0, 0, 0, 0.15);
+  --handoff-shadow-pin: 0 0 0.5px rgba(0, 0, 0, 0.18), 0 3px 8px rgba(0, 0, 0, 0.1), 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+:host([data-handoff-theme="dark"]) {
+  --handoff-bg: #2c2c2c;
+  --handoff-bg-secondary: #383838;
+  --handoff-text: rgba(255, 255, 255, 0.9);
+  /* #2c2c2c 背景に対し rgba(255,255,255,0.5) は 4.72:1 で AA 適合済み(実測)。据え置き。 */
+  --handoff-text-secondary: rgba(255, 255, 255, 0.5);
+  --handoff-text-tertiary: rgba(255, 255, 255, 0.3);
+  --handoff-border: #444444;
+  --handoff-shadow: 0 0 0.5px rgba(0, 0, 0, 0.3), 0 10px 16px rgba(0, 0, 0, 0.35), 0 2px 5px rgba(0, 0, 0, 0.3);
+  --handoff-shadow-pin: 0 0 0.5px rgba(0, 0, 0, 0.35), 0 3px 8px rgba(0, 0, 0, 0.25), 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.handoff-toolbar *,
+.handoff-popover *,
+.handoff-sidebar *,
+.handoff-name-overlay *,
+.handoff-new-comment-box *,
+.handoff-new-pin *,
+.handoff-sheet *,
+.handoff-sheet-scrim * {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* Toolbar */
+.handoff-toolbar {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--handoff-bg);
+  border: 1px solid var(--handoff-border);
+  border-radius: 24px;
+  padding: 4px;
+  box-shadow: var(--handoff-shadow);
+  font-family: var(--handoff-font-family);
+  z-index: 1;
+}
+
+.handoff-mode-group {
+  display: flex;
+  position: relative;
+  border-radius: 16px;
+  border: 1px solid var(--handoff-border);
+  background: var(--handoff-bg-secondary);
+  padding: 2px;
+}
+
+.handoff-mode-slider {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: calc(33.333% - 2px);
+  height: calc(100% - 4px);
+  background: var(--handoff-pin-color);
+  border-radius: 14px;
+  transition: transform 0.2s ease;
+  pointer-events: none;
+}
+
+.handoff-mode-slider.pos-1 {
+  transform: translateX(100%);
+}
+
+.handoff-mode-slider.pos-2 {
+  transform: translateX(200%);
+}
+
+.handoff-mode-toggle {
+  padding: 5px 10px;
+  border: none;
+  background: transparent;
+  color: var(--handoff-text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s;
+  position: relative;
+  z-index: 1;
+  border-radius: 14px;
+}
+
+.handoff-mode-toggle.active {
+  color: #fff;
+}
+
+.handoff-mode-toggle:not(.active):hover {
+  background: var(--handoff-bg);
+}
+
+.handoff-toolbar.snapping {
+  transition: top 0.2s ease, bottom 0.2s ease, left 0.2s ease, right 0.2s ease, transform 0.2s ease;
+}
+
+.handoff-toolbar-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--handoff-border);
+}
+
+.handoff-toolbar-btn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--handoff-text-secondary);
+  font-size: var(--handoff-text-lg);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+
+.handoff-toolbar-btn:hover {
+  background: var(--handoff-bg-secondary);
+}
+
+.handoff-toolbar-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  top: auto;
+  background: var(--handoff-bg);
+  border-radius: var(--handoff-radius);
+  box-shadow: var(--handoff-shadow);
+  padding: 4px;
+  min-width: 140px;
+  z-index: 1;
+}
+
+.handoff-toolbar-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--handoff-text);
+  font-size: var(--handoff-text-base);
+  font-family: var(--handoff-font-family);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+.handoff-toolbar-menu-item:hover {
+  background: var(--handoff-bg-secondary);
+}
+
+.handoff-toolbar-menu.menu-top {
+  bottom: auto;
+  top: calc(100% + 8px);
+}
+/* Popover */
+.handoff-popover {
+  position: fixed;
+  width: 360px;
+  max-height: 400px;
+  overflow-y: auto;
+  background: var(--handoff-bg);
+  border-radius: var(--handoff-radius);
+  box-shadow: var(--handoff-shadow);
+  font-family: var(--handoff-font-family);
+  color: var(--handoff-text);
+  font-size: var(--handoff-text-base);
+  z-index: 2;
+}
+
+.handoff-popover-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 40px;
+  padding: 0 8px 0 16px;
+  border-bottom: 1px solid var(--handoff-border);
+  font-size: var(--handoff-text-xs);
+  font-weight: 550;
+  letter-spacing: 0.05px;
+}
+
+.handoff-popover-titlebar-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.handoff-popover-titlebar-btn {
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--handoff-text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+
+.handoff-popover-titlebar-btn:hover {
+  background: var(--handoff-bg-secondary);
+}
+
+.handoff-popover-threads {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0 12px;
+}
+
+.handoff-popover-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 4px 16px;
+  position: relative;
+  min-width: 0;
+}
+
+.handoff-popover-avatar {
+  flex-shrink: 0;
+  width: var(--handoff-avatar-size);
+  height: var(--handoff-avatar-size);
+  border-radius: 9999px;
+  background: var(--handoff-pin-color);
+  color: #fff;
+  font-size: var(--handoff-text-xs);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.handoff-popover-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--handoff-avatar-size);
+  line-height: var(--handoff-line-lg);
+  min-width: 0;
+}
+
+.handoff-popover-name strong {
+  font-weight: 550;
+  font-size: var(--handoff-text-base);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.handoff-time {
+  color: var(--handoff-text-secondary);
+  font-size: var(--handoff-text-xs);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.handoff-row-actions {
+  /* display:none はフォーカス不可能になり、hover を持たないキーボード/タッチの
+     ユーザーが Edit/Delete に到達できなくなる。opacity + pointer-events で
+     見た目だけ隠し、Tab で辿り着けるようにする。 */
+  display: flex;
+  opacity: 0;
+  pointer-events: none;
+  margin-left: auto;
+  gap: 2px;
+  transition: opacity 0.1s;
+}
+
+.handoff-popover-row:hover .handoff-row-actions,
+.handoff-row-actions:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.handoff-row-action-btn {
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--handoff-text-tertiary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.handoff-row-action-btn:hover {
+  background: var(--handoff-bg-secondary);
+  color: var(--handoff-text);
+}
+
+.handoff-edit-container {
+  flex: 1;
+  min-width: 0;
+  border-radius: 8px;
+  background: var(--handoff-bg-secondary);
+  display: flex;
+  flex-direction: column;
+}
+
+.handoff-edit-container:focus-within {
+  box-shadow: 0 0 0 1px var(--handoff-pin-color);
+}
+
+.handoff-edit-textarea {
+  width: 100%;
+  min-height: 40px;
+  max-height: 200px;
+  padding: 6px 8px 0;
+  border: none;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  color: var(--handoff-text);
+  font-size: var(--handoff-text-base);
+  font-family: var(--handoff-font-family);
+  resize: none;
+  outline: none;
+  line-height: var(--handoff-line-base);
+  overflow: hidden;
+}
+
+.handoff-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 4px 6px 6px;
+}
+
+.handoff-edit-save,
+.handoff-edit-cancel {
+  border: none;
+  border-radius: 6px;
+  font-size: var(--handoff-text-sm);
+  font-family: var(--handoff-font-family);
+  font-weight: 550;
+  cursor: pointer;
+  padding: 4px 12px;
+}
+
+.handoff-edit-save {
+  background: var(--handoff-pin-color);
+  color: #fff;
+}
+
+.handoff-edit-save:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.handoff-edit-cancel {
+  background: transparent;
+  color: var(--handoff-text-secondary);
+}
+
+.handoff-edit-cancel:hover {
+  color: var(--handoff-text);
+  background: var(--handoff-bg-secondary);
+}
+
+.handoff-popover-body {
+  line-height: var(--handoff-line-md);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.handoff-popover-resolved-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--handoff-border);
+  font-size: var(--handoff-text-sm);
+  color: var(--handoff-text-secondary);
+}
+
+.handoff-popover-resolved-row > span:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--handoff-avatar-size);
+  height: var(--handoff-avatar-size);
+}
+
+.handoff-popover-resolved-row svg {
+  flex-shrink: 0;
+}
+
+.handoff-popover-reply-area {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--handoff-border);
+}
+
+.handoff-popover-reply-area .handoff-popover-avatar-small {
+  margin-top: 2px;
+}
+
+.handoff-popover-avatar-small {
+  flex-shrink: 0;
+  width: var(--handoff-avatar-size);
+  height: var(--handoff-avatar-size);
+  border-radius: 9999px;
+  background: var(--handoff-pin-color);
+  color: #fff;
+  font-size: var(--handoff-text-xs);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--handoff-font-family);
+}
+
+.handoff-popover-reply-area .handoff-input-wrap {
+  flex: 1;
+}
+
+.handoff-popover-reply-area .handoff-input-wrap textarea {
+  max-height: 120px;
+}
+
+/* More menu dropdown */
+.handoff-popover-menu {
+  position: absolute;
+  background: var(--handoff-bg);
+  border: 1px solid var(--handoff-border);
+  border-radius: 8px;
+  box-shadow: var(--handoff-shadow);
+  padding: 3px;
+  z-index: 10;
+  white-space: nowrap;
+}
+
+.handoff-popover-menu-item {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--handoff-text);
+  font-size: var(--handoff-text-sm);
+  font-family: var(--handoff-font-family);
+  cursor: pointer;
+  text-align: left;
+}
+
+.handoff-popover-menu-item:hover {
+  background: var(--handoff-bg-secondary);
+}
+
+/* Sidebar sheet override (mobile review mode) */
+.handoff-sidebar.handoff-sidebar-sheet {
+  top: auto !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 100% !important;
+  height: auto !important;
+  max-height: 80vh !important;
+  border-radius: 16px 16px 0 0 !important;
+  resize: none;
+  animation: handoff-sheet-in 0.25s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.handoff-sidebar.handoff-sidebar-sheet .handoff-sidebar-resizer {
+  display: none;
+}
+
+.handoff-sidebar .handoff-sidebar-sheet-handle {
+  display: none;
+}
+
+.handoff-sidebar.handoff-sidebar-sheet .handoff-sidebar-sheet-handle {
+  display: flex;
+}
+
+/* Sidebar */
+/* Sidebar — Figma UI3 comment sidebar */
+.handoff-sidebar {
+  position: fixed;
+  top: 0;
+  width: 240px;
+  height: 100vh;
+  background: var(--handoff-bg);
+  border-radius: var(--handoff-radius);
+  box-shadow: var(--handoff-shadow);
+  font-family: var(--handoff-font-family);
+  color: var(--handoff-text);
+  font-size: var(--handoff-text-xs);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.handoff-sidebar-right {
+  right: 8px;
+  top: 8px;
+  height: calc(100vh - 16px);
+}
+
+.handoff-sidebar-left {
+  left: 8px;
+  top: 8px;
+  height: calc(100vh - 16px);
+}
+
+.handoff-sidebar-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+  z-index: 10;
+  background: transparent;
+  transition: background 0.1s;
+}
+
+.handoff-sidebar-resizer:hover, .handoff-sidebar-resizer.dragging {
+  background: var(--handoff-pin-color);
+  opacity: 0.3;
+}
+
+.handoff-sidebar-right .handoff-sidebar-resizer {
+  left: 0;
+}
+
+.handoff-sidebar-left .handoff-sidebar-resizer {
+  right: 0;
+}
+
+/* Header */
+.handoff-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 40px;
+  padding: 0 8px 0 16px;
+  flex-shrink: 0;
+}
+
+.handoff-sidebar-title {
+  font-size: var(--handoff-text-xs);
+  font-weight: 450;
+  color: var(--handoff-text);
+}
+
+.handoff-sidebar-icon-btn {
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--handoff-text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.1s;
+}
+
+.handoff-sidebar-icon-btn:hover {
+  background: var(--handoff-bg-secondary);
+}
+
+/* Filter toggle */
+.handoff-sidebar-filter-bar {
+  display: flex;
+  position: relative;
+  margin: 4px 8px 0;
+  border-radius: 14px;
+  border: 1px solid var(--handoff-border);
+  background: var(--handoff-bg-secondary);
+  padding: 2px;
+  flex-shrink: 0;
+}
+
+.handoff-sidebar-filter-slider {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: calc(33.333% - 2px);
+  height: calc(100% - 4px);
+  background: var(--handoff-pin-color);
+  border-radius: 12px;
+  transition: transform 0.2s ease;
+  z-index: 0;
+}
+
+.handoff-sidebar-filter-slider.pos-1 {
+  transform: translateX(100%);
+}
+
+.handoff-sidebar-filter-slider.pos-2 {
+  transform: translateX(200%);
+}
+
+.handoff-sidebar-filter-btn {
+  flex: 1;
+  padding: 4px 0;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--handoff-text-secondary);
+  font-size: var(--handoff-text-xs);
+  font-weight: 450;
+  cursor: pointer;
+  font-family: var(--handoff-font-family);
+  line-height: var(--handoff-line-xs);
+  letter-spacing: 0.055px;
+  text-align: center;
+  position: relative;
+  z-index: 1;
+  transition: color 0.15s;
+}
+
+.handoff-sidebar-filter-btn.active {
+  color: #fff;
+}
+
+/* Comment list */
+.handoff-sidebar-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+/* Row */
+.handoff-sidebar-row {
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.handoff-sidebar-unread-dot {
+  position: absolute;
+  top: 10px;
+  left: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--handoff-pin-color);
+}
+
+.handoff-sidebar-row-content {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 5px;
+  transition: background 0.1s;
+}
+
+.handoff-sidebar-row:hover .handoff-sidebar-row-content {
+  background: var(--handoff-bg-secondary);
+}
+
+.handoff-sidebar-row-content.selected {
+  background: #e5f4ff;
+}
+
+:host([data-handoff-theme="dark"]) .handoff-sidebar-row-content.selected {
+  background: rgba(13, 153, 255, 0.15);
+}
+
+.handoff-sidebar-row-content.resolved {
+  opacity: 0.5;
+}
+
+.handoff-sidebar-num {
+  flex-shrink: 0;
+  width: var(--handoff-avatar-size);
+  height: var(--handoff-avatar-size);
+  border-radius: 9999px;
+  background: var(--handoff-pin-color);
+  color: #fff;
+  font-size: var(--handoff-text-xs);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.handoff-sidebar-row-content.read .handoff-sidebar-num {
+  background: var(--handoff-text-secondary);
+}
+
+.handoff-sidebar-row-content.resolved .handoff-sidebar-num {
+  background: var(--handoff-text-secondary);
+}
+
+.handoff-sidebar-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.handoff-sidebar-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--handoff-avatar-size);
+  line-height: var(--handoff-line-lg);
+  min-width: 0;
+}
+
+.handoff-sidebar-body strong {
+  font-weight: 550;
+  font-size: var(--handoff-text-base);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.handoff-sidebar-name-row .handoff-time {
+  white-space: nowrap;
+}
+
+.handoff-sidebar-body p {
+  margin: 2px 0;
+  font-size: var(--handoff-text-xs);
+  color: var(--handoff-text-secondary);
+  line-height: var(--handoff-line-xs);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.handoff-sidebar-meta {
+  font-size: var(--handoff-text-xs);
+  color: var(--handoff-text-secondary);
+}
+
+.handoff-agent-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--handoff-text-2xs);
+  font-weight: 550;
+  line-height: 1.4;
+  padding: 2px 6px;
+  border-radius: 99px;
+  /* 透過 #0d99ff1f + var(--handoff-pin-color) は白背景で 2.64:1 しか出ず、10px の
+     小さい文字には WCAG AA(4.5:1) を大きく割っていた(実測)。単色の淡い背景と
+     濃い青文字に置き換えて計算し直す(白背景 5.68:1)。 */
+  background: #e0f1ff;
+  color: #065abd;
+  vertical-align: middle;
+  letter-spacing: 0.02em;
+  align-self: center;
+}
+
+:host([data-handoff-theme="dark"]) .handoff-agent-badge {
+  /* 同条件をダーク背景(#2c2c2c)でも確認:旧配色は 3.98:1 で同じく AA 未達だった(実測)。
+     紺地に明るい青文字へ変更し 8.70:1 を確保する。 */
+  background: #0f2842;
+  color: #8cccff;
+}
+
+/* Empty state */
+.handoff-sidebar-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 40px 24px;
+  text-align: center;
+}
+
+.handoff-sidebar-empty-icon {
+  color: var(--handoff-text-secondary);
+}
+
+.handoff-sidebar-empty-text {
+  font-size: var(--handoff-text-xs);
+  line-height: var(--handoff-line-xs);
+  color: var(--handoff-text-secondary);
+  letter-spacing: 0.055px;
+}
+
+/* Name prompt modal */
+.handoff-name-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 3;
+}
+
+.handoff-name-modal {
+  background: var(--handoff-bg);
+  border-radius: var(--handoff-radius);
+  width: 360px;
+  box-shadow: var(--handoff-shadow);
+  font-family: var(--handoff-font-family);
+  color: var(--handoff-text);
+  font-size: var(--handoff-text-base);
+}
+
+.handoff-name-modal h3 {
+  font-size: var(--handoff-text-lg);
+  font-weight: 550;
+  margin-bottom: 4px;
+}
+
+.handoff-name-modal p {
+  font-size: var(--handoff-text-base);
+  color: var(--handoff-text-secondary);
+  margin-bottom: 12px;
+}
+
+.handoff-name-input {
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 8px;
+  background: var(--handoff-bg-secondary);
+  color: var(--handoff-text);
+  font-size: var(--handoff-text-base);
+  font-family: var(--handoff-font-family);
+  margin-bottom: 12px;
+  outline: none;
+  min-height: 28px;
+}
+
+.handoff-name-input::placeholder {
+  color: var(--handoff-text-tertiary);
+}
+
+.handoff-name-input:focus {
+  box-shadow: 0 0 0 1px var(--handoff-pin-color);
+}
+
+.handoff-name-submit {
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 8px;
+  background: var(--handoff-pin-color);
+  color: #fff;
+  font-size: var(--handoff-text-base);
+  font-weight: 550;
+  cursor: pointer;
+  font-family: var(--handoff-font-family);
+}
+
+.handoff-name-submit:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.handoff-name-submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.handoff-btn-destructive {
+  background: transparent;
+  color: #e53e3e;
+  border: 1px solid #e53e3e;
+}
+
+.handoff-btn-destructive:hover {
+  background: #e53e3e;
+  color: #fff;
+  opacity: 1;
+}
+
+.handoff-confirm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 40px;
+  padding: 0 8px 0 16px;
+  border-bottom: 1px solid var(--handoff-border);
+}
+
+.handoff-confirm-header h3 {
+  font-size: var(--handoff-text-xs);
+  font-weight: 550;
+  letter-spacing: 0.05px;
+  margin: 0;
+}
+
+.handoff-confirm-body {
+  padding: 12px 16px 16px;
+}
+
+/* New comment creation */
+.handoff-new-pin {
+  position: fixed;
+  width: 36px;
+  height: 36px;
+  transform: translate(-3px, -32px);
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.12)) drop-shadow(0 3px 8px rgba(0, 0, 0, 0.08));
+  pointer-events: none;
+  animation: handoff-pin-drop 0.2s ease-out;
+  z-index: 2;
+}
+
+.handoff-new-comment-box {
+  position: fixed;
+  box-sizing: border-box;
+  width: 280px;
+  max-width: calc(100vw - 16px);
+  background: var(--handoff-bg);
+  border-radius: var(--handoff-radius);
+  box-shadow: var(--handoff-shadow);
+  padding: 12px;
+  pointer-events: auto;
+  animation: handoff-box-in 0.15s ease-out;
+  z-index: 2;
+}
+
+/* Shared input wrapper — contains textarea + send button inside */
+.handoff-input-wrap {
+  position: relative;
+  min-height: 28px;
+  border-radius: 8px;
+  background: var(--handoff-bg-secondary);
+}
+
+.handoff-input-wrap:focus-within {
+  box-shadow: 0 0 0 1px var(--handoff-pin-color);
+}
+
+.handoff-input-wrap.has-content {
+  min-height: 56px;
+}
+
+.handoff-input-wrap textarea {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  max-height: 200px;
+  padding: 4px 32px 4px 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--handoff-text);
+  font-size: var(--handoff-text-base);
+  font-family: var(--handoff-font-family);
+  resize: none;
+  outline: none;
+  line-height: var(--handoff-line-base);
+  overflow: hidden;
+}
+
+.handoff-input-wrap.has-content textarea {
+  padding-right: 8px;
+  padding-bottom: 28px;
+}
+
+.handoff-input-wrap textarea::placeholder {
+  color: var(--handoff-text-tertiary);
+}
+
+.handoff-input-wrap .handoff-send-btn {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 50%;
+  background: var(--handoff-pin-color);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+  padding: 0;
+}
+
+.handoff-input-wrap.has-content .handoff-send-btn {
+  top: auto;
+  bottom: 4px;
+  transform: none;
+}
+
+.handoff-input-wrap .handoff-send-btn:disabled {
+  background: var(--handoff-border);
+  color: var(--handoff-text-tertiary);
+  cursor: default;
+}
+
+/* Save animation */
+.handoff-new-comment-box.handoff-saving {
+  animation: handoff-box-out 0.25s ease-out forwards;
+}
+
+.handoff-new-pin.handoff-saving {
+  animation: handoff-pin-fade 0.25s ease-out forwards;
+}
+
+@keyframes handoff-pin-drop {
+  from {
+    transform: translate(-3px, -32px) scale(0);
+    opacity: 0;
+  }
+
+  to {
+    transform: translate(-3px, -32px) scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes handoff-box-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes handoff-box-out {
+  to {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+}
+
+@keyframes handoff-pin-fade {
+  to {
+    opacity: 0;
+  }
+}
+
+/* ピン(ui/pins.ts)は Shadow DOM の外(document.body 直下)に描くため、
+ * そのスタイルはここではなくインラインで完結させている。 */
+
+/* Bottom sheet (mobile) */
+.handoff-sheet-scrim {
+  position: fixed;
+  inset: 0;
+  background: transparent;
+  z-index: 2;
+  /* The shadow container is pointer-events:none — opt back in so taps
+     on the scrim dismiss the sheet instead of falling through to the page */
+  pointer-events: auto;
+}
+.handoff-sheet-scrim.handoff-sheet-closing {
+  animation: handoff-scrim-out 0.2s ease-in forwards;
+}
+.handoff-sheet {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  max-height: 70vh;
+  background: var(--handoff-bg);
+  border-radius: 16px 16px 0 0;
+  box-shadow: var(--handoff-shadow);
+  font-family: var(--handoff-font-family);
+  color: var(--handoff-text);
+  font-size: var(--handoff-text-base);
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: handoff-sheet-in 0.25s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.handoff-sheet.handoff-sheet-closing {
+  animation: handoff-sheet-out 0.2s ease-in forwards;
+}
+.handoff-sheet-handle {
+  display: flex;
+  justify-content: center;
+  padding: 10px 0 4px;
+  flex-shrink: 0;
+}
+.handoff-sheet-handle-pill {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--handoff-border);
+}
+.handoff-sheet-scroll {
+  flex: 1;
+  overflow-y: auto;
+}
+@keyframes handoff-sheet-in {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+@keyframes handoff-sheet-out {
+  from { transform: translateY(0); }
+  to { transform: translateY(100%); }
+}
+@keyframes handoff-scrim-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes handoff-scrim-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@media (pointer: coarse) and (max-width: 767px), (max-width: 479px) {
+  :host {
+    --handoff-text-lg: 19px;
+    --handoff-text-base: 16px;
+    --handoff-text-sm: 15px;
+    --handoff-text-xs: 14px;
+    --handoff-text-2xs: 12px;
+
+    --handoff-line-lg: 28px;
+    --handoff-line-md: 26px;
+    --handoff-line-base: 24px;
+    --handoff-line-xs: 20px;
+
+    --handoff-avatar-size: 28px;
+  }
+}
+
+.handoff-popover-contentWrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Toast — 保存/import 失敗などを伝える。他の UI より前面に出す。 */
+.handoff-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  max-width: calc(100vw - 32px);
+  padding: 10px 16px;
+  border-radius: 10px;
+  font-family: var(--handoff-font-family);
+  font-size: var(--handoff-text-base);
+  line-height: var(--handoff-line-base);
+  box-shadow: var(--handoff-shadow);
+  pointer-events: auto;
+  z-index: 4;
+  animation: handoff-toast-in 0.15s ease-out;
+}
+
+.handoff-toast-info {
+  background: var(--handoff-bg);
+  color: var(--handoff-text);
+  border: 1px solid var(--handoff-border);
+}
+
+.handoff-toast-error {
+  /* 白文字 #fff on #c0392b は 5.87:1(実測)で AA 適合。 */
+  background: #c0392b;
+  color: #ffffff;
+}
+
+@keyframes handoff-toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+/* 未読バッジは装飾のみのドットなので、単体の <span> のままだとスクリーンリーダーに
+   意味不明な要素として読み上げられてしまう。ラベルはテキストとして視覚的に隠し、
+   ドット自体は装飾として扱う(sidebar.ts 側で aria-hidden + sr-only テキストを付与)。 */
+.handoff-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

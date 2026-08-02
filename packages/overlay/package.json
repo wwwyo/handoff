@@ -12,7 +12,10 @@
       "import": "./dist/handoff.js",
       "require": "./dist/handoff.umd.cjs"
     },
-    "./style.css": "./dist/handoff.css"
+    "./style.css": "./dist/handoff.css",
+    "./types": {
+      "types": "./dist/core/data.d.ts"
+    }
   },
   "files": ["dist", "LICENSE", "README.md"],
   "scripts": {

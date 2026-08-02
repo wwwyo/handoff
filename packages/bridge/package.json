@@ -6,9 +6,18 @@
   "bin": {
     "handoff-bridge": "./dist/cli.js"
   },
-  "files": ["dist", "LICENSE", "README.md"],
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "@wwwyo/handoff": "workspace:*",
+    "zod": "4.1.13"
+  }
 }
