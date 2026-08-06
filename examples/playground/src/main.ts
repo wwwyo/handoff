@@ -1,10 +1,20 @@
-import { Handoff } from '@wwwyo/handoff'
+import { Handoff, createBridgeAdapter } from '@wwwyo/handoff'
 import '@wwwyo/handoff/style.css'
+
+// 既定は localStorage。bridge に繋いで動かしたいときだけ環境変数で切り替える。
+// VITE_HANDOFF_BRIDGE_TOKEN は handoff-bridge serve が起動時に stderr へ出す capability token。
+const bridgeToken = import.meta.env.VITE_HANDOFF_BRIDGE_TOKEN
+const bridgeUrl = import.meta.env.VITE_HANDOFF_BRIDGE_URL
 
 const handoff = Handoff.init({
   storageKey: 'handoff-playground',
   theme: 'auto',
+  ...(bridgeToken
+    ? { adapter: createBridgeAdapter({ token: bridgeToken, ...(bridgeUrl ? { url: bridgeUrl } : {}) }) }
+    : {}),
 })
+
+console.log(`[playground] 保存先: ${bridgeToken ? `bridge (${bridgeUrl ?? '既定'})` : 'localStorage'}`)
 
 handoff.on('comment:add', (comment) => {
   console.log('[playground] comment:add', comment.text, comment.anchor.selector)

@@ -1,7 +1,7 @@
 {
   "name": "@wwwyo/handoff-bridge",
   "version": "0.1.0",
-  "description": "Local bridge that receives handoff comments from the browser and pushes them into a running Claude Code session.",
+  "description": "Ingest server for handoff comments, plus a local CLI for Claude Code to read them from a configurable storage backend.",
   "type": "module",
   "bin": {
     "handoff-bridge": "./dist/cli.js"
@@ -16,8 +16,11 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.29.0",
     "@wwwyo/handoff": "workspace:*",
+    "pg": "8.22.0",
     "zod": "4.1.13"
+  },
+  "devDependencies": {
+    "@types/pg": "8.20.0"
   }
 }

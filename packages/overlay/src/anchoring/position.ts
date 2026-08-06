@@ -1,7 +1,7 @@
 import type { Anchor, Resolution } from '../core/types'
 import { isElementVisible } from '../core/visibility'
 import { generateSelector } from './selector'
-import { createTextQuote, findByTextQuote } from './text-quote'
+import { createTextQuote, findByTextQuote, verifyTextQuote } from './text-quote'
 
 export interface ResolvedPosition {
   x: number
@@ -20,25 +20,40 @@ function clamp01(value: number): number {
 }
 
 /**
- * セレクタが複数要素にヒットしたときは、可視な要素を優先する
- * （同一構造が hidden な別タブ/バリアントに重複するケースへの対策）。
+ * selector で複数要素にヒットしたとき、隣接情報の textQuote（exact + tagName のみ）で
+ * 絞り込む。prefix/suffix は使わない — 兄弟要素の増減で容易に変わる周辺情報であり、
+ * 「どの要素を指すか」の判定に使うと無関係な DOM 変更で正しい要素まで見失う
+ * （text-quote.ts の検証/絞り込み分離と同じ理由。バグ3参照）。
+ *
+ * 絞り込んでも 1 件に決まらなければ selector 経路は失敗として扱い、呼び出し側
+ * （locate）で findByTextQuote → viewport のフォールバックに委ねる。同じ構造の別要素を
+ * 「ここだ」と自信ありげに誤指定するより、劣化を通知するほうを優先する。
  */
-function queryBestElement(selector: string): Element | null {
-  if (!selector) return null
+function queryBestElement(anchor: Anchor): LocatedElement | null {
+  if (!anchor.selector) return null
+  let all: Element[]
   try {
-    const all = Array.from(document.querySelectorAll(selector))
-    if (all.length === 0) return null
-    if (all.length === 1) return all[0] ?? null
-    return all.find((el) => isElementVisible(el)) ?? all[0] ?? null
+    all = Array.from(document.querySelectorAll(anchor.selector))
   } catch {
     return null
   }
+  if (all.length === 0) return null
+  // selector だけで一意に決まった場合のみ 'selector' を報告する。
+  if (all.length === 1) return { element: all[0] as Element, resolution: 'selector' }
+
+  if (!anchor.textQuote) return null
+
+  const narrowed = all.filter((el) => verifyTextQuote(el, anchor.textQuote as NonNullable<Anchor['textQuote']>))
+  if (narrowed.length !== 1) return null
+
+  // textQuote の助けを借りて絞り込んだので、selector 単独の解決ではないことを正直に表す。
+  return { element: narrowed[0] as Element, resolution: 'text-quote' }
 }
 
 /** selector → textQuote の順にフォールバックし、解決に使った要素と層を返す。 */
 function locate(anchor: Anchor): LocatedElement | null {
-  const bySelector = queryBestElement(anchor.selector)
-  if (bySelector) return { element: bySelector, resolution: 'selector' }
+  const bySelector = queryBestElement(anchor)
+  if (bySelector) return bySelector
 
   if (anchor.textQuote) {
     const byText = findByTextQuote(anchor.textQuote)

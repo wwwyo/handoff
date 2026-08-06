@@ -47,3 +47,20 @@ describe('編集/削除メニューがキーボードで到達可能', () => {
     parent.remove()
   })
 })
+
+describe('新規コメント入力の余計な区切り線', () => {
+  it('composer では border-top を打ち消す（上に区切る相手がいないため）', () => {
+    // .handoff-popover-reply-area は popover でスレッド行の下に置く前提で
+    // border-top を持つ。composer はこの class を流用しているので、
+    // 打ち消しが無いと入力欄の上に意味のない線が出る。
+    const rule = stylesCss.match(/\.handoff-new-comment-box\s+\.handoff-popover-reply-area\s*\{[^}]*\}/)
+    expect(rule).not.toBeNull()
+    expect(rule![0]).toMatch(/border-top:\s*none/)
+  })
+
+  it('popover 側の border-top は残す', () => {
+    const rule = stylesCss.match(/(?<![\w-])\.handoff-popover-reply-area\s*\{[^}]*\}/)
+    expect(rule).not.toBeNull()
+    expect(rule![0]).toMatch(/border-top:\s*1px solid/)
+  })
+})

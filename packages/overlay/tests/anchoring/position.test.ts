@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAnchor, resolveAnchor } from '../../src/anchoring/position'
+import type { Anchor } from '../../src/core/types'
 
 /**
  * jsdom は layout を計算しないため、テスト対象の要素の getBoundingClientRect /
@@ -98,6 +99,58 @@ describe('createAnchor / resolveAnchor', () => {
     expect(resolved.y).toBeGreaterThan(0)
     expect(resolved.x).toBeLessThan(window.innerWidth)
     expect(resolved.y).toBeLessThan(window.innerHeight)
+  })
+
+  it('selector が複数一致し、textQuote で一方に絞れるときは正しい要素を指し resolution は text-quote になる', () => {
+    document.body.innerHTML = `
+      <p class="item">誤った段落</p>
+      <p class="item">正しい段落</p>
+    `
+    const items = document.querySelectorAll('.item')
+    mockRect(items[0] as Element, { left: 0, top: 0, width: 100, height: 20 })
+    mockRect(items[1] as Element, { left: 0, top: 50, width: 100, height: 20 })
+
+    // selector 単独では2件に一致する。textQuote の exact + tagName だけで
+    // items[1]（正しい段落）まで絞り込めるはず。
+    const anchor: Anchor = {
+      selector: '.item',
+      offsetX: 0.5,
+      offsetY: 0.5,
+      viewportX: 0.5,
+      viewportY: 0.5,
+      textQuote: { exact: '正しい段落', tagName: 'p' },
+    }
+
+    const resolved = resolveAnchor(anchor)
+    expect(resolved.resolution).toBe('text-quote')
+    // 誤った段落（top:0）ではなく正しい段落（top:50）を指しているはず
+    expect(resolved.y).toBeCloseTo(50 + 20 * 0.5)
+  })
+
+  it('selector が複数一致し、textQuote でも絞れないときは selector を主張せず降格する', () => {
+    document.body.innerHTML = `
+      <div><p class="item">同じ文言</p></div>
+      <div><p class="item">同じ文言</p></div>
+    `
+    const items = document.querySelectorAll('.item')
+    mockRect(items[0] as Element, { left: 0, top: 0, width: 100, height: 20 })
+    mockRect(items[1] as Element, { left: 0, top: 50, width: 100, height: 20 })
+
+    // 2件とも exact + tagName が一致してしまい絞り込めない（prefix/suffix も未指定）
+    const anchor: Anchor = {
+      selector: '.item',
+      offsetX: 0.5,
+      offsetY: 0.5,
+      viewportX: 0.5,
+      viewportY: 0.5,
+      textQuote: { exact: '同じ文言', tagName: 'p' },
+    }
+
+    const resolved = resolveAnchor(anchor)
+    // 「ここだ」と自信ありげに間違った要素（または不確かな要素）を selector として
+    // 名乗るくらいなら、viewport フォールバックへ降格すべき。
+    expect(resolved.resolution).not.toBe('selector')
+    expect(resolved.resolution).toBe('viewport')
   })
 
   it('座標は page 座標系（scrollX/Y 込み）で返す', () => {

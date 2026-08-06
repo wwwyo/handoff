@@ -1,15 +1,17 @@
 /**
- * overlay からのコメントを受け取るローカル HTTP サーバ。
+ * overlay からのコメントを受け取る HTTP サーバ。ローカル専用ではなく、
+ * リモート（ステージング環境）にデプロイされる前提で作る（`.agent/design/remote-handoff.md`
+ * 「全体構成」節の `handoff-ingest` に相当）。
  *
  * How: `node:http` のみで実装する（overlay 同様、bridge も依存を絞る）。body の
- * 形状検証だけは zod（`packages/bridge` の既存依存）に任せる。
+ * 形状検証だけは zod（`packages/bridge` の既存依存）に任せる。永続化は
+ * `CommentBackend`（`./backend/types.ts`）に委ね、このモジュール自体は状態を持たない。
  * - `POST   /comments`             : body `{ comment: Comment, url: string }`。**作成専用**。既存 id なら 409
  * - `PATCH  /comments/:id`         : body `{ patch: CommentPatch, url: string }`。部分更新
  * - `DELETE /comments/:id`         : 204。既存 id が無ければ 404
  * - `POST   /comments/:id/replies` : body `{ reply: Reply, url: string }`。返信の追加
- * - `GET    /comments?url=...`     : `{ comments: Comment[] }` を返す。overlay の StorageAdapter#load 相当。
- *                                    `url` クエリを指定するとそのページの分だけに絞る（未指定なら全件）
- * - `GET    /health`               : 認証不要のヘルスチェック
+ * - `GET    /comments?url=&cursor=&limit=` : `{ comments: Comment[], nextCursor?: string }` を返す
+ * - `GET    /health`               : 認証・rate limit 不要のヘルスチェック
  *
  * body/query の形状は overlay 側の adapter 契約（`packages/overlay/src/adapters/bridge.ts`）に
  * 合わせている。ページ URL は `Comment` 型の外（リクエストの文脈）として渡される。
@@ -22,16 +24,21 @@
  * `replies` 配列全体を握っている。もし PATCH がそれをそのまま受け入れると、Claude が
  * `reply` tool で積んだ「ブラウザがまだ知らない返信」を、ブラウザ発の PATCH が
  * 上書きして消してしまう。返信は必ず専用の `POST /comments/:id/replies` を通し、
- * store 側で追記させる。
+ * backend 側で追記させる。
  *
- * セキュリティ: localhost にのみ bind し、`/health` 以外は共有トークンの
- * Bearer 認証を必須にする。CORS は許可 origin を明示的に渡されたパターンとの
- * 一致でのみ許可し、ワイルドカード全許可はしない。body は zod で検証し、
- * サイズにも上限を設ける（無制限に受け取るとメモリを食い潰す）。
+ * セキュリティ: bind 先は呼び出し側（cli.ts）が決める（既定 127.0.0.1、リモートでは
+ * 0.0.0.0）。`/health` 以外は共有トークンの Bearer 認証と IP 単位の rate limit を
+ * 必須にする。CORS は許可 origin を明示的に渡されたパターンとの一致でのみ許可し、
+ * ワイルドカード全許可はしない。body は zod で検証し、サイズにも上限を設ける
+ * （無制限に受け取るとメモリを食い潰す）。
+ *
+ * 認証なしで誰でも書ける前提（`.agent/design/remote-handoff.md`「認証と、割り切っていること」）
+ * のため、token は capability URL 相当の唯一の防御線であり、rate limit は荒らし対策の
+ * 必須項目である（同節「割り切っていること」）。
  */
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { z } from 'zod'
-import type { CommentStore } from './comment-store.js'
+import type { CommentBackend } from './backend/types.js'
 
 /** POST body に来る Comment の形状検証。overlay の型（core/types.ts）の必須部分だけを見る。 */
 const AnchorSchema = z.object({
@@ -115,9 +122,71 @@ class PayloadTooLargeError extends Error {}
 /** 1 リクエストの body サイズ上限（bytes）。既定 1MB。overlay 側は 1 コメントしか送らない想定なので十分。 */
 export const DEFAULT_MAX_BODY_BYTES = 1_000_000
 
+/**
+ * `GET /comments` の `limit` クエリの上限。認証なしで誰でも叩ける前提（top-of-file
+ * docstring 参照）なので、上限を設けないと 1 リクエストで全件を掃おうとする負荷が
+ * そのまま backend に流れてしまう。
+ *
+ * Why not 400（上限超過を拒否する）: `limit` は呼び出し側（overlay / Claude 側の
+ * ページング実装）が「多めに読みたいだけ」で大きい値を送ってくることがあり得て、
+ * それを毎回エラーにすると呼び出し側は「上限がいくつか」を知って作り直す必要が
+ * 出る。既存の rate limit（`RateLimiter`）も「超過分を弾く」のではなく緩和で
+ * 対応する設計に寄せているのと同じ考え方で、ここも clamp（黙って上限に丸める）を
+ * 選んだ。呼び出し側からは「指定した件数より少なく返ってきた」だけに見え、
+ * 400 で作り直しを強制するより後方互換になる。値の 200 は Postgres 実装の既定
+ * `DEFAULT_LIST_LIMIT`（50）の 4 倍で、通常のページングより余裕を持たせつつ、
+ * 無制限にはしない、という目安として決めた（厳密な計測に基づく値ではない）。
+ */
+export const MAX_LIST_LIMIT = 200
+
+/** rate limit の既定値。IP 単位・時間窓ごとのリクエスト数で制限する。 */
+export const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000
+export const DEFAULT_RATE_LIMIT_MAX_REQUESTS = 60
+
+export interface RateLimitOptions {
+  /** 時間窓（ms）。既定 {@link DEFAULT_RATE_LIMIT_WINDOW_MS}。 */
+  windowMs?: number
+  /** 時間窓あたりの許容リクエスト数。既定 {@link DEFAULT_RATE_LIMIT_MAX_REQUESTS}。 */
+  max?: number
+}
+
+/**
+ * IP 単位の固定窓（fixed window）rate limiter。
+ *
+ * Why not sliding window / token bucket: 公開エンドポイントの荒らし対策として
+ * 「明らかに閾値を超えた連投を弾く」ができれば十分で、境界での多少のバースト
+ * 許容は許容範囲。実装の単純さを優先した。
+ *
+ * **弱点（decision.log に明記）**: この実装はプロセス内 `Map` のみで状態を持つ。
+ * 複数プロセス・複数インスタンスでスケールすると、IP ごとの上限はインスタンス単位
+ * にしかならず、全体では実質的に「上限 × インスタンス数」まで通ってしまう。
+ * 単一プロセス前提の弱い実装であることを利用者は理解した上で使うこと。
+ */
+class RateLimiter {
+  private readonly hits = new Map<string, { count: number; resetAt: number }>()
+
+  constructor(
+    private readonly windowMs: number,
+    private readonly max: number,
+  ) {}
+
+  /** 呼ぶたびに1リクエスト分消費する。true なら許可、false なら制限超過。 */
+  consume(key: string): boolean {
+    const now = Date.now()
+    const entry = this.hits.get(key)
+    if (!entry || now >= entry.resetAt) {
+      this.hits.set(key, { count: 1, resetAt: now + this.windowMs })
+      return true
+    }
+    if (entry.count >= this.max) return false
+    entry.count += 1
+    return true
+  }
+}
+
 export interface ServerOptions {
-  store: CommentStore
-  /** 起動時に生成する共有トークン。Authorization: Bearer <token> で照合する。空文字は許可しない。 */
+  backend: CommentBackend
+  /** capability token。`Authorization: Bearer <token>` で照合する。空文字は許可しない。 */
   token: string
   /**
    * 許可する origin パターンの配列。`*` は 1 セグメント分のワイルドカードとして扱う
@@ -130,6 +199,8 @@ export interface ServerOptions {
   allowedOrigins: string[]
   /** body サイズ上限（bytes）。既定 {@link DEFAULT_MAX_BODY_BYTES}。 */
   maxBodyBytes?: number
+  /** rate limit の設定。既定 {@link DEFAULT_RATE_LIMIT_WINDOW_MS} / {@link DEFAULT_RATE_LIMIT_MAX_REQUESTS}。 */
+  rateLimit?: RateLimitOptions
 }
 
 /**
@@ -188,8 +259,13 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(payload)
 }
 
+/** rate limit のキーに使う IP。プロキシ越しの `X-Forwarded-For` は信用せず、TCP 接続元のみ見る。 */
+function clientKey(req: IncomingMessage): string {
+  return req.socket.remoteAddress ?? 'unknown'
+}
+
 export function createServer(options: ServerOptions) {
-  const { store, token, allowedOrigins, maxBodyBytes = DEFAULT_MAX_BODY_BYTES } = options
+  const { backend, token, allowedOrigins, maxBodyBytes = DEFAULT_MAX_BODY_BYTES, rateLimit } = options
 
   // Why not: 空トークンで起動できてしまうと、後段の `Bearer ${token}` 比較が
   // 空 Bearer と一致してしまい認証が実質無効化される。起動時点で弾く。
@@ -201,6 +277,11 @@ export function createServer(options: ServerOptions) {
   if (allowedOrigins.includes('*')) {
     throw new Error('handoff-bridge: allowedOrigins must not include a bare "*" (allow-all)')
   }
+
+  const limiter = new RateLimiter(
+    rateLimit?.windowMs ?? DEFAULT_RATE_LIMIT_WINDOW_MS,
+    rateLimit?.max ?? DEFAULT_RATE_LIMIT_MAX_REQUESTS,
+  )
 
   return createHttpServer((req, res) => {
     const origin = req.headers.origin
@@ -231,6 +312,12 @@ export function createServer(options: ServerOptions) {
       return
     }
 
+    // rate limit は認証の成否に関わらずかける（トークン総当たりも対象に含める）。
+    if (!limiter.consume(clientKey(req))) {
+      sendJson(res, 429, { error: 'too many requests' })
+      return
+    }
+
     // Bearer プレフィックスを剥がした上で空文字を明示的に拒否する。
     // `auth !== \`Bearer ${token}\`` だけの比較では token 側が万一空文字だと
     // 空 Bearer と一致してしまうため、二重にガードする（token 自体は上で空文字を拒否済み）。
@@ -242,13 +329,41 @@ export function createServer(options: ServerOptions) {
     }
 
     if (req.method === 'GET' && reqUrl.pathname === '/comments') {
-      const pageUrl = reqUrl.searchParams.get('url') ?? undefined
-      sendJson(res, 200, { comments: store.list(pageUrl) })
+      void (async () => {
+        const pageUrl = reqUrl.searchParams.get('url') ?? undefined
+        const cursor = reqUrl.searchParams.get('cursor') ?? undefined
+        const limitParam = reqUrl.searchParams.get('limit')
+        const requestedLimit = limitParam !== null ? Number(limitParam) : undefined
+        if (requestedLimit !== undefined && (!Number.isInteger(requestedLimit) || requestedLimit <= 0)) {
+          sendJson(res, 400, { error: 'invalid limit' })
+          return
+        }
+        // 上限超過は 400 にせず clamp する。理由は MAX_LIST_LIMIT の doc comment 参照。
+        const limit = requestedLimit !== undefined ? Math.min(requestedLimit, MAX_LIST_LIMIT) : undefined
+        try {
+          const result = await backend.list({ pageUrl, cursor, limit })
+          // HTTP レスポンスの形状は `{ comments: Comment[] }` のまま維持する（overlay の
+          // adapter が読んでいるため）。backend からは `StoredComment[]`（pageUrl 付き）が
+          // 返るが、ここで `comment` だけへ落として返す。
+          sendJson(res, 200, { comments: result.items.map((item) => item.comment), nextCursor: result.nextCursor })
+        } catch {
+          // backend.list() の失敗はクライアントの入力起因ではないので 500。
+          // ここに try/catch を付けないと、外側の `void (async () => {...})()` は
+          // 何も待たないため reject が拾われず unhandled rejection になる。
+          sendJson(res, 500, { error: 'internal error' })
+        }
+      })()
       return
     }
 
     if (req.method === 'POST' && reqUrl.pathname === '/comments') {
       void (async () => {
+        // body の読み取り・パース・検証と、backend の呼び出しを別の try/catch に
+        // 分ける。前者の失敗（不正な JSON / スキーマ不一致 / サイズ超過）はクライアント
+        // 起因なので 400/413、後者（backend.create() が reject）はクライアントの入力とは
+        // 無関係な障害なので 500 にする。ひとつの catch にまとめると、backend が
+        // 落ちただけなのに「不正な payload」という誤った 400 を返してしまう。
+        let parsedComment: z.infer<typeof PostCommentsBodySchema>
         try {
           const raw = await readBody(req, maxBodyBytes)
           const parsed = PostCommentsBodySchema.safeParse(JSON.parse(raw))
@@ -256,18 +371,24 @@ export function createServer(options: ServerOptions) {
             sendJson(res, 400, { error: 'invalid comment payload', issues: parsed.error.issues })
             return
           }
-          const created = store.add(parsed.data.comment, parsed.data.url)
-          if (!created) {
-            sendJson(res, 409, { error: 'comment already exists' })
-            return
-          }
-          sendJson(res, 201, { ok: true })
+          parsedComment = parsed.data
         } catch (error) {
           if (error instanceof PayloadTooLargeError) {
             sendJson(res, 413, { error: 'payload too large' })
             return
           }
           sendJson(res, 400, { error: 'invalid comment payload' })
+          return
+        }
+        try {
+          const result = await backend.create({ comment: parsedComment.comment, pageUrl: parsedComment.url })
+          if (!result.created) {
+            sendJson(res, 409, { error: 'comment already exists' })
+            return
+          }
+          sendJson(res, 201, { ok: true })
+        } catch {
+          sendJson(res, 500, { error: 'internal error' })
         }
       })()
       return
@@ -280,6 +401,9 @@ export function createServer(options: ServerOptions) {
     if (req.method === 'PATCH' && commentIdMatch) {
       const id = decodeURIComponent(commentIdMatch[1] ?? '')
       void (async () => {
+        // create と同じ理由で、パース系の失敗（400/413）と backend の失敗（500）を
+        // 別の try/catch に分ける。
+        let parsedPatch: z.infer<typeof PatchCommentBodySchema>
         try {
           const raw = await readBody(req, maxBodyBytes)
           const parsed = PatchCommentBodySchema.safeParse(JSON.parse(raw))
@@ -287,18 +411,24 @@ export function createServer(options: ServerOptions) {
             sendJson(res, 400, { error: 'invalid patch payload', issues: parsed.error.issues })
             return
           }
-          const updated = store.update(id, parsed.data.patch)
-          if (!updated) {
-            sendJson(res, 404, { error: 'comment not found' })
-            return
-          }
-          sendJson(res, 200, { comment: updated })
+          parsedPatch = parsed.data
         } catch (error) {
           if (error instanceof PayloadTooLargeError) {
             sendJson(res, 413, { error: 'payload too large' })
             return
           }
           sendJson(res, 400, { error: 'invalid patch payload' })
+          return
+        }
+        try {
+          const updated = await backend.update(id, parsedPatch.patch)
+          if (!updated) {
+            sendJson(res, 404, { error: 'comment not found' })
+            return
+          }
+          sendJson(res, 200, { comment: updated.comment })
+        } catch {
+          sendJson(res, 500, { error: 'internal error' })
         }
       })()
       return
@@ -306,19 +436,30 @@ export function createServer(options: ServerOptions) {
 
     if (req.method === 'DELETE' && commentIdMatch) {
       const id = decodeURIComponent(commentIdMatch[1] ?? '')
-      const deleted = store.delete(id)
-      if (!deleted) {
-        sendJson(res, 404, { error: 'comment not found' })
-        return
-      }
-      res.writeHead(204)
-      res.end()
+      void (async () => {
+        try {
+          const deleted = await backend.delete(id)
+          if (!deleted) {
+            sendJson(res, 404, { error: 'comment not found' })
+            return
+          }
+          res.writeHead(204)
+          res.end()
+        } catch {
+          // backend.delete() の失敗はクライアント起因ではないので 500。
+          // GET /comments と同じ理由で try/catch が必須（unhandled rejection 回避）。
+          sendJson(res, 500, { error: 'internal error' })
+        }
+      })()
       return
     }
 
     if (req.method === 'POST' && repliesMatch) {
       const id = decodeURIComponent(repliesMatch[1] ?? '')
       void (async () => {
+        // create / update と同じ理由で、パース系の失敗（400/413）と backend の
+        // 失敗（500）を別の try/catch に分ける。
+        let parsedReply: z.infer<typeof AddReplyBodySchema>
         try {
           const raw = await readBody(req, maxBodyBytes)
           const parsed = AddReplyBodySchema.safeParse(JSON.parse(raw))
@@ -326,18 +467,24 @@ export function createServer(options: ServerOptions) {
             sendJson(res, 400, { error: 'invalid reply payload', issues: parsed.error.issues })
             return
           }
-          const updated = store.addReply(id, parsed.data.reply)
-          if (!updated) {
-            sendJson(res, 404, { error: 'comment not found' })
-            return
-          }
-          sendJson(res, 201, { comment: updated })
+          parsedReply = parsed.data
         } catch (error) {
           if (error instanceof PayloadTooLargeError) {
             sendJson(res, 413, { error: 'payload too large' })
             return
           }
           sendJson(res, 400, { error: 'invalid reply payload' })
+          return
+        }
+        try {
+          const updated = await backend.addReply(id, parsedReply.reply)
+          if (!updated) {
+            sendJson(res, 404, { error: 'comment not found' })
+            return
+          }
+          sendJson(res, 201, { comment: updated.comment })
+        } catch {
+          sendJson(res, 500, { error: 'internal error' })
         }
       })()
       return
