@@ -12,9 +12,9 @@
   },
   "packageManager": "pnpm@11.15.1",
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "1.29.0",
-    "@playwright/test": "1.61.1",
-    "@types/node": "26.1.1",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@playwright/test": "1.62.0",
+    "@types/node": "26.1.2",
     "jsdom": "30.0.1",
     "typescript": "7.0.2",
     "vite": "8.1.5",
