@@ -43,7 +43,7 @@ export function importComments(json: string, store: Store, events: EventEmitter)
   // 別ページの export を読み込んだときに気付けるようにするため。
   let unanchored = 0
   for (const comment of merged.comments) {
-    if (resolveAnchor(comment.anchor).resolution === 'viewport') unanchored++
+    if (resolveAnchor(comment.anchor).resolution === 'lost') unanchored++
   }
 
   const result: ImportResult = { added: merged.added, merged: merged.merged, unanchored }

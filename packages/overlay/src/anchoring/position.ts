@@ -2,6 +2,7 @@ import type { Anchor, Resolution } from '../core/types'
 import { isElementVisible } from '../core/visibility'
 import { generateSelector } from './selector'
 import { createTextQuote, findByTextQuote, verifyTextQuote } from './text-quote'
+import { computeA11y, findByA11y, matchesA11y } from './a11y'
 
 export interface ResolvedPosition {
   x: number
@@ -19,48 +20,82 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value))
 }
 
-/**
- * selector で複数要素にヒットしたとき、隣接情報の textQuote（exact + tagName のみ）で
- * 絞り込む。prefix/suffix は使わない — 兄弟要素の増減で容易に変わる周辺情報であり、
- * 「どの要素を指すか」の判定に使うと無関係な DOM 変更で正しい要素まで見失う
- * （text-quote.ts の検証/絞り込み分離と同じ理由。バグ3参照）。
- *
- * 絞り込んでも 1 件に決まらなければ selector 経路は失敗として扱い、呼び出し側
- * （locate）で findByTextQuote → viewport のフォールバックに委ねる。同じ構造の別要素を
- * 「ここだ」と自信ありげに誤指定するより、劣化を通知するほうを優先する。
- */
-function queryBestElement(anchor: Anchor): LocatedElement | null {
-  if (!anchor.selector) return null
-  let all: Element[]
+function matchesSelector(el: Element, selector: string): boolean {
   try {
-    all = Array.from(document.querySelectorAll(anchor.selector))
+    return el.matches(selector)
   } catch {
-    return null
+    return false
   }
-  if (all.length === 0) return null
-  // selector だけで一意に決まった場合のみ 'selector' を報告する。
-  if (all.length === 1) return { element: all[0] as Element, resolution: 'selector' }
-
-  if (!anchor.textQuote) return null
-
-  const narrowed = all.filter((el) => verifyTextQuote(el, anchor.textQuote as NonNullable<Anchor['textQuote']>))
-  if (narrowed.length !== 1) return null
-
-  // textQuote の助けを借りて絞り込んだので、selector 単独の解決ではないことを正直に表す。
-  return { element: narrowed[0] as Element, resolution: 'text-quote' }
 }
 
-/** selector → textQuote の順にフォールバックし、解決に使った要素と層を返す。 */
-function locate(anchor: Anchor): LocatedElement | null {
-  const bySelector = queryBestElement(anchor)
-  if (bySelector) return bySelector
+/**
+ * selector・a11y・textQuote の3証拠それぞれが「この要素を指している」と言っている
+ * 候補を集める。集合を広げる役割（絞り込み込みの検索）はここに閉じ、後段の投票は
+ * 「検証」関数（matches/matchesA11y/verifyTextQuote）だけで行う
+ * （text-quote.ts の「絞り込みと検証は別の役割」の原則を投票全体にも適用する）。
+ */
+function collectCandidates(anchor: Anchor): Element[] {
+  const candidates = new Set<Element>()
+
+  if (anchor.selector) {
+    try {
+      for (const el of document.querySelectorAll(anchor.selector)) candidates.add(el)
+    } catch {
+      // 壊れた selector（構造が大きく変わった等）はこの証拠を諦め、他の証拠に委ねる。
+    }
+  }
+
+  if (anchor.a11y) {
+    for (const el of findByA11y(anchor.a11y)) candidates.add(el)
+  }
 
   if (anchor.textQuote) {
     const byText = findByTextQuote(anchor.textQuote)
-    if (byText) return { element: byText, resolution: 'text-quote' }
+    if (byText) candidates.add(byText)
   }
 
-  return null
+  return Array.from(candidates)
+}
+
+/** 候補要素について、anchor の持つ証拠のうち何個が一致するかを数える。 */
+function scoreCandidate(el: Element, anchor: Anchor): number {
+  let score = 0
+  if (anchor.selector && matchesSelector(el, anchor.selector)) score += 1
+  if (anchor.a11y && matchesA11y(el, anchor.a11y)) score += 1
+  if (anchor.textQuote && verifyTextQuote(el, anchor.textQuote)) score += 1
+  return score
+}
+
+/**
+ * 複数証拠の投票でアンカーを解決する。
+ *
+ * 直列フォールバック（selector → textQuote → viewport）だと「1個ヒットしたら成功」を
+ * 各層が単独で判定するしかなく、それが本当に正しい要素かを問う手段が無かった
+ * （複数一致時に最初の可視要素を自信ありげに誤指定したバグの根本原因）。ここでは
+ * selector・a11y・textQuote を対等な証拠として集め、同じ要素をいくつの証拠が
+ * 指しているかで確信度を決める。最高得点の候補が1つに決まらない（同点で複数、または
+ * 候補ゼロ）ときは、誤った要素を選ぶより見失った扱いにするほうを選び null を返す。
+ */
+function locate(anchor: Anchor): LocatedElement | null {
+  const candidates = collectCandidates(anchor)
+  if (candidates.length === 0) return null
+
+  let best: Element[] = []
+  let bestScore = -1
+  for (const el of candidates) {
+    const score = scoreCandidate(el, anchor)
+    if (score > bestScore) {
+      bestScore = score
+      best = [el]
+    } else if (score === bestScore) {
+      best.push(el)
+    }
+  }
+
+  if (best.length !== 1) return null
+
+  const resolution: Resolution = bestScore >= 2 ? 'confident' : 'uncertain'
+  return { element: best[0] as Element, resolution }
 }
 
 function positionFromElement(element: Element, anchor: Anchor, resolution: Resolution): ResolvedPosition {
@@ -85,11 +120,11 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 /**
- * 要素を見失ったときの最終手段。
+ * 投票で候補を1つに決められなかったときの最終手段。
  *
  * scrollX/Y を足しているので、画面上では固定位置に留まりスクロールに追従しない。
- * 要素に紐付いたピンとは挙動が異なるが、行き先の要素が無い以上ドキュメント上の
- * 正しい位置は復元しようがなく、推測した座標に置いて見失わせるより、
+ * 要素に紐付いたピンとは挙動が異なるが、行き先の要素が無い（または決められない）以上
+ * ドキュメント上の正しい位置は復元しようがなく、推測した座標に置いて見失わせるより、
  * 常に画面内に留めてユーザーが対処できるようにするほうを選んでいる。
  * この挙動の違いは、ピン側の「見失った」表示と合わせて意味を持つ。
  */
@@ -99,7 +134,7 @@ function viewportPosition(anchor: Anchor): ResolvedPosition {
   return {
     x: clamp(window.innerWidth * anchor.viewportX, VIEWPORT_MARGIN, maxX) + window.scrollX,
     y: clamp(window.innerHeight * anchor.viewportY, VIEWPORT_MARGIN, maxY) + window.scrollY,
-    resolution: 'viewport',
+    resolution: 'lost',
     visible: true,
   }
 }
@@ -119,6 +154,7 @@ export function createAnchor(el: Element, pageX: number, pageY: number): Anchor 
     viewportX: clamp01((pageX - scrollX) / window.innerWidth),
     viewportY: clamp01((pageY - scrollY) / window.innerHeight),
     textQuote: createTextQuote(el),
+    a11y: computeA11y(el),
   }
 }
 

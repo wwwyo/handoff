@@ -38,7 +38,7 @@ describe('PinRenderer', () => {
     renderer = new PinRenderer(container, { zIndex: 1000, onPinClick: vi.fn(), onPinMove: vi.fn() })
 
     const comment = makeComment()
-    const positions = new Map<string, PinPosition>([[comment.id, { x: 100, y: 200, resolution: 'selector' }]])
+    const positions = new Map<string, PinPosition>([[comment.id, { x: 100, y: 200, resolution: 'confident' }]])
     renderer.renderAll([comment], positions)
 
     const pin = container.querySelector('div')
@@ -52,12 +52,12 @@ describe('PinRenderer', () => {
     renderer = new PinRenderer(container, { zIndex: 1000, onPinClick: vi.fn(), onPinMove: vi.fn() })
 
     const comment = makeComment()
-    const selectorPositions = new Map<string, PinPosition>([[comment.id, { x: 10, y: 10, resolution: 'selector' }]])
+    const selectorPositions = new Map<string, PinPosition>([[comment.id, { x: 10, y: 10, resolution: 'confident' }]])
     renderer.renderAll([comment], selectorPositions)
     const normalPin = container.querySelector('div') as HTMLDivElement
     expect(normalPin.style.outline).toBe('')
 
-    const viewportPositions = new Map<string, PinPosition>([[comment.id, { x: 10, y: 10, resolution: 'viewport' }]])
+    const viewportPositions = new Map<string, PinPosition>([[comment.id, { x: 10, y: 10, resolution: 'lost' }]])
     renderer.renderAll([comment], viewportPositions)
     const lostPin = container.querySelector('div') as HTMLDivElement
     expect(lostPin.style.outline).toContain('dashed')
@@ -78,9 +78,9 @@ describe('PinRenderer', () => {
     const visibleComments = [c1, c2, c3]
 
     const positions = new Map<string, PinPosition>([
-      [c1.id, { x: 10, y: 10, resolution: 'selector' }],
+      [c1.id, { x: 10, y: 10, resolution: 'confident' }],
       // c2 は位置解決に失敗しているため positions に無い。
-      [c3.id, { x: 30, y: 30, resolution: 'selector' }],
+      [c3.id, { x: 30, y: 30, resolution: 'confident' }],
     ])
 
     // renderAll には(positions で事前 filter せず)可視コメント全体をそのまま渡す。
@@ -102,7 +102,7 @@ describe('PinRenderer', () => {
     renderer = new PinRenderer(container, { zIndex: 1000, onPinClick: vi.fn(), onPinMove: vi.fn() })
 
     const comment = makeComment()
-    renderer.renderAll([comment], new Map([[comment.id, { x: 0, y: 0, resolution: 'selector' as const }]]))
+    renderer.renderAll([comment], new Map([[comment.id, { x: 0, y: 0, resolution: 'confident' as const }]]))
     expect(container.children.length).toBe(1)
 
     renderer.destroy()

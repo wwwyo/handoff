@@ -2,6 +2,7 @@ import type { Anchor, Comment, Resolution } from '../core/types'
 import type { EventEmitter } from '../core/events'
 import { resolveAnchorWithElement, resolveFromElement } from './position'
 import { verifyTextQuote } from './text-quote'
+import { matchesA11y } from './a11y'
 
 export interface TrackedPosition {
   id: string
@@ -116,13 +117,13 @@ export class AnchorTracker {
     if (cached?.isConnected && (!revalidate || this.stillValid(cached, comment.anchor))) {
       // revalidate=true（ホストが refresh() を呼んだ = 「DOM の意味が変わった」明示的な合図）
       // のときだけラベルを作り直す。selector 属性が剥がれるなど「要素の追跡自体は継続して
-      // いるが、もう selector 経由では説明できない」ケースでも前回ラベルの 'selector' を
+      // いるが、もう selector 経由では説明できない」ケースでも前回ラベルの 'confident' を
       // 名乗り続けると、UI の「見失った」表示や anchor:degraded が発火せず劣化がユーザーに
       // 伝わらない。revalidate=false（scroll/resize の追従）では前回ラベルをそのまま使い、
       // 毎フレームの再判定でキャッシュの意味（レイアウトスラッシング回避）を壊さない。
       const resolution = revalidate
         ? this.classifyResolution(cached, comment.anchor)
-        : (this.lastResolution.get(comment.id) ?? 'selector')
+        : (this.lastResolution.get(comment.id) ?? 'uncertain')
       this.lastResolution.set(comment.id, resolution)
       const result = resolveFromElement(cached, comment.anchor, resolution)
       return { id: comment.id, x: result.x, y: result.y, resolution: result.resolution, visible: result.visible }
@@ -140,59 +141,73 @@ export class AnchorTracker {
   }
 
   /**
-   * revalidate 時に、キャッシュ済み要素が今もそのアンカーの指す対象と言えるかを確かめる。
-   * isConnected だけでは「ノードは残っているが SPA が中身を差し替えた」ケースを検出できない
-   * ため、textQuote があれば textContent まで見る。textQuote が無い（selector のみの）
-   * アンカーは selector 一致で代用する。
+   * revalidate 時に、キャッシュ済み要素が今もそのアンカーの証拠のどれかと一致すると
+   * 言えるかを確かめる。
+   *
+   * textQuote / a11y（内容に基づく証拠）が1つでもあれば、それらの一致だけで判定する。
+   * selector（id 等）は DOM 構造が保たれているだけの弱い証拠でしかなく、SPA が同じ
+   * ノードを使い回して中身だけ差し替えるケース（id は変わらないまま textContent だけ
+   * 変わる）を selector 一致だけで「valid」と見なすと検出できなくなる
+   * （このケースを検出することが revalidate の存在理由そのもの）。
+   * textQuote も a11y も無い（selector しか証拠が無い）アンカーに限り、selector の
+   * 一致を最後の手段として使う。
    */
   private stillValid(cached: Element, anchor: Anchor): boolean {
-    if (anchor.textQuote) {
-      return verifyTextQuote(cached, anchor.textQuote)
+    if (anchor.textQuote || anchor.a11y) {
+      if (anchor.textQuote && verifyTextQuote(cached, anchor.textQuote)) return true
+      if (anchor.a11y && matchesA11y(cached, anchor.a11y)) return true
+      return false
     }
+    if (!anchor.selector) return false
     try {
-      return Array.from(document.querySelectorAll(anchor.selector)).includes(cached)
+      return cached.matches(anchor.selector)
     } catch {
       return false
     }
   }
 
   /**
-   * revalidate 時に、キャッシュ済み要素が今どの層で説明できるかを判定してラベルを付け直す。
+   * revalidate 時に、キャッシュ済み要素が今いくつの証拠と一致するかを数えて
+   * confident/uncertain のラベルを付け直す。
    *
-   * `Element.matches` を使い `document.querySelectorAll` は呼ばない — 全文書を再走査せず
-   * 対象要素 1 つだけを見て済ませることで、revalidate のたびにレイアウトスラッシングの
-   * 原因となる全文書クエリを発生させない（scroll/resize 追従用のキャッシュ戦略と整合させる）。
-   * これは「selector が一意に絞れているか」までは見ないという意味でもあり、その分の精度は
-   * 「selector 属性が剥がれた等で、もう selector 経路では一切説明できない」ケースを
-   * 確実に検出できることとのトレードオフとして許容する。
+   * `Element.matches` / 個別要素への `matchesA11y` / `verifyTextQuote` だけを使い
+   * `document.querySelectorAll` は呼ばない — 全文書を再走査せず対象要素1つだけを
+   * 見て済ませることで、revalidate のたびにレイアウトスラッシングの原因となる
+   * 全文書クエリを発生させない（scroll/resize 追従用のキャッシュ戦略と整合させる）。
+   * これは「他に同点の要素がいないか」までは見ないという意味でもあり、その分の精度は、
+   * キャッシュ済み要素1つに対する軽量な再判定で済ませられることとのトレードオフとして
+   * 許容する。
    */
   private classifyResolution(cached: Element, anchor: Anchor): Resolution {
-    const stillMatchesSelector = (() => {
-      if (!anchor.selector) return false
+    let score = 0
+    if (anchor.selector) {
       try {
-        return cached.matches(anchor.selector)
+        if (cached.matches(anchor.selector)) score += 1
       } catch {
-        return false
+        // 壊れた selector はこの証拠を諦める
       }
-    })()
-    if (stillMatchesSelector) return 'selector'
-    if (anchor.textQuote && verifyTextQuote(cached, anchor.textQuote)) return 'text-quote'
+    }
+    if (anchor.a11y && matchesA11y(cached, anchor.a11y)) score += 1
+    if (anchor.textQuote && verifyTextQuote(cached, anchor.textQuote)) score += 1
+
+    if (score >= 2) return 'confident'
+    if (score === 1) return 'uncertain'
     // stillValid が真である前提で呼ばれるため、ここには到達しないはずだが、
-    // 型/防御的に selector 側へフォールバックしておく。
-    return 'selector'
+    // 型/防御的に uncertain 側へフォールバックしておく。
+    return 'uncertain'
   }
 
   /**
    * 解決層が変わったコメントだけ degrade/recover を emit し、UI の余計な再描画を避ける。
    *
-   * selector → text-quote も後退として扱う。要素を一意に指せなくなり
-   * 「同じ文言の要素」を推測している状態であり、viewport 落ちほどではないにせよ
+   * confident → uncertain も後退として扱う。要素を複数証拠で一意に指せなくなり
+   * 「1つの証拠だけが同意している」状態であり、viewport 落ちほどではないにせよ
    * 位置がずれうることを呼び出し側が知る必要があるため。
    */
   private emitResolutionChange(comment: Comment, previous: Resolution | undefined, current: Resolution): void {
     if (previous === undefined || previous === current) return
 
-    const rank: Record<Resolution, number> = { selector: 0, 'text-quote': 1, viewport: 2 }
+    const rank: Record<Resolution, number> = { confident: 0, uncertain: 1, lost: 2 }
     if (rank[current] > rank[previous]) {
       this.events.emit('anchor:degraded', { comment, resolution: current })
     } else {

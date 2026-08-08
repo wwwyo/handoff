@@ -111,7 +111,7 @@ export class PinRenderer {
    * 見た目で示す。黙って通常のピンとして描かない。
    */
   private applyResolutionStyle(pin: HTMLDivElement, resolution: Resolution): void {
-    const lost = resolution === 'viewport'
+    const lost = resolution === 'lost'
     let badge = pin.querySelector<HTMLDivElement>('[data-handoff-anchor-lost-badge]')
 
     if (lost && !badge) {
