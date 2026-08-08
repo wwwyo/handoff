@@ -1,4 +1,4 @@
-import type { A11ySignature } from '../core/types'
+import type { A11ySignature, NameSource } from '../core/types'
 import { normalizeText } from './text-quote'
 
 /**
@@ -33,6 +33,63 @@ const IMPLICIT_ROLES: Record<string, string> = {
 }
 
 const INPUT_TEXT_TYPES = new Set(['text', 'email', 'search', 'tel', 'url', 'password'])
+
+/**
+ * 明示 role として認識する値。ARIA のフォールバックは「最初に認識できた role」を採るので、
+ * 未知のトークンを飛ばすためにこの集合が要る。網羅ではなく、投票の一票として使う範囲。
+ */
+const KNOWN_ROLES = new Set([
+  'alert',
+  'alertdialog',
+  'article',
+  'banner',
+  'button',
+  'cell',
+  'checkbox',
+  'columnheader',
+  'combobox',
+  'complementary',
+  'contentinfo',
+  'dialog',
+  'form',
+  'grid',
+  'gridcell',
+  'group',
+  'heading',
+  'img',
+  'link',
+  'list',
+  'listbox',
+  'listitem',
+  'main',
+  'menu',
+  'menubar',
+  'menuitem',
+  'navigation',
+  'option',
+  'progressbar',
+  'radio',
+  'region',
+  'row',
+  'rowgroup',
+  'rowheader',
+  'search',
+  'searchbox',
+  'separator',
+  'slider',
+  'spinbutton',
+  'status',
+  'switch',
+  'tab',
+  'table',
+  'tablist',
+  'tabpanel',
+  'textbox',
+  'toolbar',
+  'tooltip',
+  'tree',
+  'treeitem',
+])
 
 /**
  * 自身の textContent を name にしてよい role（ARIA の "name from content" 相当）。
@@ -78,16 +135,16 @@ function computeRole(el: Element): string | undefined {
 }
 
 /**
- * `role` 属性は空白区切りのトークンリスト（フォールバック role）を取りうるため、
- * ARIA と同じく先頭トークンだけを採用し、比較を安定させるため小文字に畳む。
+ * `role` 属性は空白区切りのトークンリスト（フォールバック role）を取りうる。ARIA は
+ * 先頭ではなく**最初に認識できた** role を採るので、未知のトークンは飛ばす。
+ * 比較を安定させるため小文字に畳む。
  *
- * Why not 属性値をそのまま使う: `role="button link"` が role 名 `"button link"` に
- * なると `NAME_FROM_CONTENT` の判定も一致判定も外れ、その要素は a11y 証拠を
- * 一切持てなくなる。
+ * Why not 先頭トークンを無条件に採る: `role="future-role button"` が未知 role になり、
+ * 暗黙 role へも落ちないのでその要素は a11y 証拠を一切持てなくなる。
  */
 function explicitRole(el: Element): string | undefined {
-  const first = el.getAttribute('role')?.trim().split(/\s+/)[0]
-  return first ? first.toLowerCase() : undefined
+  const tokens = el.getAttribute('role')?.trim().toLowerCase().split(/\s+/) ?? []
+  return tokens.find((token) => KNOWN_ROLES.has(token))
 }
 
 function truncate(text: string): string {
@@ -135,13 +192,18 @@ function nameFromNative(el: Element): string | undefined {
   )
 }
 
-function computeName(el: Element, role: string): string | undefined {
-  return (
-    nameFromLabelledBy(el) ??
-    normalizedOrUndefined(el.getAttribute('aria-label')) ??
-    nameFromNative(el) ??
-    (NAME_FROM_CONTENT.has(role) ? normalizedOrUndefined(el.textContent) : undefined)
-  )
+/**
+ * name と、その出どころを返す。出どころが要るのは投票側で、`content`（textContent 由来）は
+ * textQuote と同じ文字列を見ているため独立した証拠として数えられない。
+ */
+function computeName(el: Element, role: string): { name: string; from: NameSource } | undefined {
+  const authored =
+    nameFromLabelledBy(el) ?? normalizedOrUndefined(el.getAttribute('aria-label')) ?? nameFromNative(el)
+  if (authored) return { name: authored, from: 'author' }
+
+  if (!NAME_FROM_CONTENT.has(role)) return undefined
+  const content = normalizedOrUndefined(el.textContent)
+  return content ? { name: content, from: 'content' } : undefined
 }
 
 /**
@@ -153,7 +215,7 @@ export function computeA11y(el: Element): A11ySignature | undefined {
   if (!role) return undefined
   const name = computeName(el, role)
   if (!name) return undefined
-  return { role, name }
+  return { role, name: name.name, nameFrom: name.from }
 }
 
 /**
@@ -162,7 +224,9 @@ export function computeA11y(el: Element): A11ySignature | undefined {
  */
 export function matchesA11y(el: Element, sig: A11ySignature): boolean {
   if (computeRole(el) !== sig.role) return false
-  return computeName(el, sig.role) === sig.name
+  // nameFrom は比較しない。同じ name を指していれば出どころが変わっても同一物で、
+  // nameFrom が効くのは投票で票を畳むかどうかの判断だけ。
+  return computeName(el, sig.role)?.name === sig.name
 }
 
 /**

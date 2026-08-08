@@ -1,6 +1,6 @@
 import type { Anchor, Comment, Resolution } from '../core/types'
 import type { EventEmitter } from '../core/events'
-import { evidenceCount, resolveAnchorWithElement, resolveFromElement } from './position'
+import { evidenceCount, resolveAnchorWithElement, resolveFromElement, scoreCandidate } from './position'
 import { verifyTextQuote } from './text-quote'
 import { matchesA11y } from './a11y'
 
@@ -179,16 +179,7 @@ export class AnchorTracker {
    * 許容する。
    */
   private classifyResolution(cached: Element, anchor: Anchor): Resolution {
-    let score = 0
-    if (anchor.selector) {
-      try {
-        if (cached.matches(anchor.selector)) score += 1
-      } catch {
-        // 壊れた selector はこの証拠を諦める
-      }
-    }
-    if (anchor.a11y && matchesA11y(cached, anchor.a11y)) score += 1
-    if (anchor.textQuote && verifyTextQuote(cached, anchor.textQuote)) score += 1
+    const score = scoreCandidate(cached, anchor)
 
     // score 0 は stillValid が真である前提で呼ばれる以上ここには来ないが、来た場合は
     // evidenceCount と一致してしまう（証拠ゼロのアンカー）ので先に弾く。

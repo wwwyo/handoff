@@ -44,7 +44,7 @@ describe('createAnchor / resolveAnchor', () => {
 
     const anchor = createAnchor(el, 60, 45)
     expect(anchor.selector).toBe('#target')
-    expect(anchor.a11y).toEqual({ role: 'button', name: '送信する' })
+    expect(anchor.a11y).toEqual({ role: 'button', name: '送信する', nameFrom: 'content' })
 
     const resolved = resolveAnchor(anchor)
     expect(resolved.resolution).toBe('confident')
@@ -198,7 +198,7 @@ describe('createAnchor / resolveAnchor', () => {
       offsetY: 0.5,
       viewportX: 0.5,
       viewportY: 0.5,
-      a11y: { role: 'button', name: '要素B' },
+      a11y: { role: 'button', name: '要素B', nameFrom: 'content' },
     }
 
     const resolved = resolveAnchor(anchor)
@@ -210,11 +210,44 @@ describe('createAnchor / resolveAnchor', () => {
     const el = document.getElementById('target')!
     mockRect(el, { left: 0, top: 0, width: 100, height: 40 })
     const anchor = createAnchor(el, 50, 20)
-    expect(anchor.a11y).toEqual({ role: 'button', name: '送信する' })
+    expect(anchor.a11y).toEqual({ role: 'button', name: '送信する', nameFrom: 'author' })
 
     // aria-label(a11y の name) だけを書き換える。selector(id) と textQuote(textContent
     // 'Submit') は変わらないので、その2証拠だけで confident を維持できるはず。
     el.setAttribute('aria-label', '別のラベルに変わった')
+
+    const resolved = resolveAnchor(anchor)
+    expect(resolved.resolution).toBe('confident')
+  })
+
+  it('name が textContent 由来のとき、a11y と textQuote の相関した2票で誤った要素を選ばない', () => {
+    document.body.innerHTML = '<div><button id="target">送信</button></div>'
+    const el = document.getElementById('target')!
+    mockRect(el, { left: 0, top: 0, width: 100, height: 40 })
+    const anchor = createAnchor(el, 10, 10)
+
+    // 元要素のラベルだけ変え、別の場所に古いラベルを持つ要素を置く。
+    // 元要素は selector のみ一致(1票)、別要素は a11y と textQuote が一致するが
+    // どちらも textContent 由来なので同時に壊れる相関した証拠。独立した2票として
+    // 数えると 2-1 で別要素が勝ち、confident な誤指定になる
+    document.body.innerHTML = '<div><button id="target">確定</button></div><div><button id="other">送信</button></div>'
+    mockRect(document.getElementById('target')!, { left: 0, top: 0, width: 100, height: 40 })
+    mockRect(document.getElementById('other')!, { left: 200, top: 200, width: 100, height: 40 })
+
+    const resolved = resolveAnchor(anchor)
+    expect(resolved.resolution).toBe('lost')
+  })
+
+  it('name が aria-label 由来なら textQuote と独立した票として数える', () => {
+    document.body.innerHTML = '<button id="target" aria-label="送信ボタン">送信</button>'
+    const el = document.getElementById('target')!
+    mockRect(el, { left: 0, top: 0, width: 100, height: 40 })
+    const anchor = createAnchor(el, 10, 10)
+
+    // id を変えて selector を壊す。aria-label は textContent と別ソースなので
+    // 同時には壊れず、a11y + textQuote の2票で confident を維持できる
+    document.body.innerHTML = '<button id="renamed" aria-label="送信ボタン">送信</button>'
+    mockRect(document.getElementById('renamed')!, { left: 0, top: 0, width: 100, height: 40 })
 
     const resolved = resolveAnchor(anchor)
     expect(resolved.resolution).toBe('confident')
