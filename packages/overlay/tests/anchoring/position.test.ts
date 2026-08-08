@@ -37,21 +37,22 @@ describe('createAnchor / resolveAnchor', () => {
     document.body.innerHTML = ''
   })
 
-  it('selector で解決できるときは selector 層を返す', () => {
-    document.body.innerHTML = '<div id="target">見出しテキスト</div>'
+  it('selector・textQuote・a11y の3証拠すべてが同じ要素を指すとき confident を返す', () => {
+    document.body.innerHTML = '<button id="target">送信する</button>'
     const el = document.getElementById('target')!
     mockRect(el, { left: 10, top: 20, width: 100, height: 50 })
 
     const anchor = createAnchor(el, 60, 45)
     expect(anchor.selector).toBe('#target')
+    expect(anchor.a11y).toEqual({ role: 'button', name: '送信する' })
 
     const resolved = resolveAnchor(anchor)
-    expect(resolved.resolution).toBe('selector')
+    expect(resolved.resolution).toBe('confident')
     expect(resolved.x).toBeCloseTo(10 + 100 * anchor.offsetX)
     expect(resolved.y).toBeCloseTo(20 + 50 * anchor.offsetY)
   })
 
-  it('selector が壊れても textQuote で解決できる', () => {
+  it('selector が壊れて証拠が textQuote 単独になったときは uncertain として解決する', () => {
     document.body.innerHTML = '<div id="target">壊れる前のセレクタ用テキスト</div>'
     const el = document.getElementById('target')!
     mockRect(el, { left: 0, top: 0, width: 100, height: 40 })
@@ -63,11 +64,37 @@ describe('createAnchor / resolveAnchor', () => {
     mockRect(renamed, { left: 5, top: 5, width: 80, height: 30 })
 
     const resolved = resolveAnchor(anchor)
-    expect(resolved.resolution).toBe('text-quote')
+    expect(resolved.resolution).toBe('uncertain')
     expect(resolved.visible).toBe(true)
   })
 
-  it('selector も textQuote も解決できなければ viewport 相対座標へフォールバックする', () => {
+  it('selector しか証拠を持たないアンカーは、それが一致すれば confident を返す', () => {
+    document.body.innerHTML = '<div id="target">テキスト</div>'
+    mockRect(document.getElementById('target')!, { left: 0, top: 0, width: 100, height: 40 })
+    // アイコンだけのボタンや画像のように、テキストも accessible name も採取できない要素は
+    // 作成時点で selector しか証拠を持てない。持っている証拠が全て一致している以上、
+    // 得票数が1でも「3つ持っていて1つしか一致しない」状態と同一視してはならない。
+    const anchor: Anchor = { selector: '#target', offsetX: 0.5, offsetY: 0.5, viewportX: 0.5, viewportY: 0.5 }
+
+    const resolved = resolveAnchor(anchor)
+    expect(resolved.resolution).toBe('confident')
+  })
+
+  it('3証拠のうち1つしか一致しないときは uncertain を返す', () => {
+    document.body.innerHTML = '<button id="target" aria-label="送信">送信する</button>'
+    const el = document.getElementById('target')!
+    mockRect(el, { left: 0, top: 0, width: 100, height: 40 })
+    const anchor = createAnchor(el, 10, 10)
+
+    // id とラベルとテキストを全て変え、selector だけが一致する状態を作る
+    document.body.innerHTML = '<button id="target" aria-label="確定">確定する</button>'
+    mockRect(document.getElementById('target')!, { left: 0, top: 0, width: 100, height: 40 })
+
+    const resolved = resolveAnchor(anchor)
+    expect(resolved.resolution).toBe('uncertain')
+  })
+
+  it('selector も textQuote も解決できなければ viewport 相対座標へ落ち resolution は lost になる', () => {
     document.body.innerHTML = '<div id="target">テキスト</div>'
     const el = document.getElementById('target')!
     mockRect(el, { left: 0, top: 0, width: 100, height: 40 })
@@ -78,7 +105,7 @@ describe('createAnchor / resolveAnchor', () => {
     document.body.innerHTML = '<div>まったく別の内容</div>'
 
     const resolved = resolveAnchor(anchor)
-    expect(resolved.resolution).toBe('viewport')
+    expect(resolved.resolution).toBe('lost')
     expect(resolved.visible).toBe(true)
     expect(resolved.x).toBeCloseTo(window.innerWidth * anchor.viewportX + window.scrollX)
     expect(resolved.y).toBeCloseTo(window.innerHeight * anchor.viewportY + window.scrollY)
@@ -94,14 +121,14 @@ describe('createAnchor / resolveAnchor', () => {
     document.body.innerHTML = '<div>まったく別の内容</div>'
 
     const resolved = resolveAnchor(anchor)
-    expect(resolved.resolution).toBe('viewport')
+    expect(resolved.resolution).toBe('lost')
     expect(resolved.x).toBeGreaterThan(0)
     expect(resolved.y).toBeGreaterThan(0)
     expect(resolved.x).toBeLessThan(window.innerWidth)
     expect(resolved.y).toBeLessThan(window.innerHeight)
   })
 
-  it('selector が複数一致し、textQuote で一方に絞れるときは正しい要素を指し resolution は text-quote になる', () => {
+  it('selector が複数一致しても textQuote まで一致する候補が1つだけなら confident になる', () => {
     document.body.innerHTML = `
       <p class="item">誤った段落</p>
       <p class="item">正しい段落</p>
@@ -110,8 +137,8 @@ describe('createAnchor / resolveAnchor', () => {
     mockRect(items[0] as Element, { left: 0, top: 0, width: 100, height: 20 })
     mockRect(items[1] as Element, { left: 0, top: 50, width: 100, height: 20 })
 
-    // selector 単独では2件に一致する。textQuote の exact + tagName だけで
-    // items[1]（正しい段落）まで絞り込めるはず。
+    // selector 単独では2件に一致するが、textQuote(exact + tagName) は items[1] にしか
+    // 一致しないため items[1] だけが2証拠一致(selector+textQuote)で最高得点になる。
     const anchor: Anchor = {
       selector: '.item',
       offsetX: 0.5,
@@ -122,12 +149,12 @@ describe('createAnchor / resolveAnchor', () => {
     }
 
     const resolved = resolveAnchor(anchor)
-    expect(resolved.resolution).toBe('text-quote')
+    expect(resolved.resolution).toBe('confident')
     // 誤った段落（top:0）ではなく正しい段落（top:50）を指しているはず
     expect(resolved.y).toBeCloseTo(50 + 20 * 0.5)
   })
 
-  it('selector が複数一致し、textQuote でも絞れないときは selector を主張せず降格する', () => {
+  it('selector も textQuote も同点で複数候補が残るときは lost として降格する', () => {
     document.body.innerHTML = `
       <div><p class="item">同じ文言</p></div>
       <div><p class="item">同じ文言</p></div>
@@ -136,7 +163,8 @@ describe('createAnchor / resolveAnchor', () => {
     mockRect(items[0] as Element, { left: 0, top: 0, width: 100, height: 20 })
     mockRect(items[1] as Element, { left: 0, top: 50, width: 100, height: 20 })
 
-    // 2件とも exact + tagName が一致してしまい絞り込めない（prefix/suffix も未指定）
+    // 2件とも selector + textQuote(exact + tagName) の両方に一致してしまい、得点が同点で
+    // 1件に決まらない（prefix/suffix も未指定）
     const anchor: Anchor = {
       selector: '.item',
       offsetX: 0.5,
@@ -147,10 +175,63 @@ describe('createAnchor / resolveAnchor', () => {
     }
 
     const resolved = resolveAnchor(anchor)
-    // 「ここだ」と自信ありげに間違った要素（または不確かな要素）を selector として
-    // 名乗るくらいなら、viewport フォールバックへ降格すべき。
-    expect(resolved.resolution).not.toBe('selector')
-    expect(resolved.resolution).toBe('viewport')
+    // 「ここだ」と自信ありげに間違った要素（または不確かな要素）を選ぶくらいなら、
+    // viewport フォールバックへ降格すべき。
+    expect(resolved.resolution).toBe('lost')
+  })
+
+  it('1証拠ずつ別要素を支持し同点になるときも lost として降格する', () => {
+    document.body.innerHTML = `
+      <div id="a">要素A</div>
+      <button aria-label="要素B">ボタン</button>
+    `
+    const a = document.getElementById('a')!
+    const b = document.querySelector('button')!
+    mockRect(a, { left: 0, top: 0, width: 100, height: 20 })
+    mockRect(b, { left: 0, top: 50, width: 100, height: 20 })
+
+    // selector は a だけを、a11y は b だけを支持する。互いに他方の証拠には一致しないため
+    // どちらも得点1で並び、1つに決められない。
+    const anchor: Anchor = {
+      selector: '#a',
+      offsetX: 0.5,
+      offsetY: 0.5,
+      viewportX: 0.5,
+      viewportY: 0.5,
+      a11y: { role: 'button', name: '要素B' },
+    }
+
+    const resolved = resolveAnchor(anchor)
+    expect(resolved.resolution).toBe('lost')
+  })
+
+  it('ボタンの aria-label が変わっても selector + textQuote が残っていれば confident のまま', () => {
+    document.body.innerHTML = '<button id="target" aria-label="送信する">Submit</button>'
+    const el = document.getElementById('target')!
+    mockRect(el, { left: 0, top: 0, width: 100, height: 40 })
+    const anchor = createAnchor(el, 50, 20)
+    expect(anchor.a11y).toEqual({ role: 'button', name: '送信する' })
+
+    // aria-label(a11y の name) だけを書き換える。selector(id) と textQuote(textContent
+    // 'Submit') は変わらないので、その2証拠だけで confident を維持できるはず。
+    el.setAttribute('aria-label', '別のラベルに変わった')
+
+    const resolved = resolveAnchor(anchor)
+    expect(resolved.resolution).toBe('confident')
+  })
+
+  it('id を消して selector が壊れても a11y + textQuote が残っていれば confident のまま', () => {
+    document.body.innerHTML = '<button id="target" aria-label="送信する">Submit</button>'
+    const el = document.getElementById('target')!
+    mockRect(el, { left: 0, top: 0, width: 100, height: 40 })
+    const anchor = createAnchor(el, 50, 20)
+
+    // id を剥がして selector('#target') を壊す。a11y(aria-label) と textQuote
+    // (textContent 'Submit') は変わらないので、その2証拠だけで confident を維持できるはず。
+    el.removeAttribute('id')
+
+    const resolved = resolveAnchor(anchor)
+    expect(resolved.resolution).toBe('confident')
   })
 
   it('座標は page 座標系（scrollX/Y 込み）で返す', () => {

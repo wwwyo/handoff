@@ -67,7 +67,7 @@ describe('AnchorTracker', () => {
     expect(recovered).toHaveBeenCalledTimes(1)
   })
 
-  it('selector から text-quote への後退も degrade として報告する', () => {
+  it('confident から uncertain への後退も degrade として報告する', () => {
     document.body.innerHTML = '<div id="a">unique text here</div>'
     const comments = [makeComment('a')]
     comments[0]!.anchor.textQuote = { exact: 'unique text here' }
@@ -83,7 +83,7 @@ describe('AnchorTracker', () => {
     tracker.update()
 
     expect(degraded).toHaveBeenCalledTimes(1)
-    expect(degraded.mock.calls[0]?.[0].resolution).toBe('text-quote')
+    expect(degraded.mock.calls[0]?.[0].resolution).toBe('uncertain')
   })
 
   it('revalidate なしの update() はキャッシュ済み要素をそのまま使い、DOM を再クエリしない', () => {
@@ -151,7 +151,7 @@ describe('AnchorTracker', () => {
     expect(recovered).not.toHaveBeenCalled()
   })
 
-  it('revalidate=true で selector が死んでいる（id 剥がし）ときはラベルが selector のまま残らない', () => {
+  it('revalidate=true で selector が死んでいる（id 剥がし）ときはラベルが confident のまま残らない', () => {
     document.body.innerHTML = '<div id="a">unique original text</div>'
     const comments = [makeComment('a')]
     comments[0]!.anchor.textQuote = { exact: 'unique original text' }
@@ -160,16 +160,16 @@ describe('AnchorTracker', () => {
     events.on('anchor:degraded', degraded)
     const tracker = new AnchorTracker({ getComments: () => comments }, events, () => {})
 
-    tracker.update() // 1回目: selector '#a' が一意に一致するので 'selector' としてキャッシュする
+    tracker.update() // 1回目: selector と textQuote 両方が一致するので 'confident' としてキャッシュする
 
     // id 属性だけを剥がす。ノードは同じままなので isConnected は真、textContent も変わらない
     document.getElementById('a')!.removeAttribute('id')
 
     tracker.update(true) // revalidate=true: selector はもう一致しないのでラベルを付け直すはず
 
-    // 'selector' のまま残ると anchor:degraded が発火せず、UI の「見失った」通知が機能しない
+    // 'confident' のまま残ると anchor:degraded が発火せず、UI の「見失った」通知が機能しない
     expect(degraded).toHaveBeenCalledTimes(1)
-    expect(degraded.mock.calls[0]?.[0].resolution).toBe('text-quote')
+    expect(degraded.mock.calls[0]?.[0].resolution).toBe('uncertain')
   })
 
   it('兄弟要素の挿入で prefix が変わっても、キャッシュ済み要素が exact + tagName に合致する限り手放さない', () => {

@@ -22,8 +22,10 @@ export type CommentScope = Record<string, unknown>
 
 
 /**
- * ページ上の位置を復元するための情報。解決は selector → textQuote → viewport の順に
- * フォールバックし、どの層で解決できたかを `Resolution` として呼び出し側に返す。
+ * ページ上の位置を復元するための情報。selector・textQuote・a11y(role+name) を
+ * 独立した3つの証拠として扱い、DOM 上の候補ごとに何個の証拠が一致するかを
+ * 投票で数えて確信度を決める（anchoring/position.ts の locate 参照）。
+ * どの証拠にも一致する候補が無い/決められないときは viewport 相対座標に落ちる。
  */
 export interface Anchor {
   /** 構造パス。class 名は含めない（ビルド毎のハッシュ化で壊れるため）。 */
@@ -31,11 +33,13 @@ export interface Anchor {
   /** 対象要素の矩形に対する相対位置 (0-1)。 */
   offsetX: number
   offsetY: number
-  /** viewport に対する相対位置 (0-1)。要素が消えたときの最終手段。 */
+  /** viewport に対する相対位置 (0-1)。どの証拠にも決められなかったときの最終手段。 */
   viewportX: number
   viewportY: number
   /** 要素のテキストによる同定。DOM 構造が変わっても内容が同じなら復元できる。 */
   textQuote?: TextQuote
+  /** role + accessible name による同定。DOM 構造もテキストも変わったが役割は保たれている場合に効く。 */
+  a11y?: A11ySignature
 }
 
 export interface TextQuote {
@@ -52,8 +56,22 @@ export interface TextQuote {
   tagName?: string
 }
 
-/** アンカーがどの層で解決されたか。UI とイベントで「見失った」ことを明示するために使う。 */
-export type Resolution = 'selector' | 'text-quote' | 'viewport'
+/** role + accessible name による同定。selector・textQuote に次ぐ第3の証拠。 */
+export interface A11ySignature {
+  role: string
+  name: string
+}
+
+/**
+ * アンカー解決の確信度。selector・textQuote・a11y の3証拠のうち、同じ候補要素を
+ * いくつが指したかで決まる。「どの層で解決したか」という直列フォールバックの
+ * 名残ではなく、投票結果としての確信度を表す。
+ *
+ * - confident: 2つ以上の証拠が一致した候補が1つだけ
+ * - uncertain: 一致した証拠が1つだけの候補が1つ
+ * - lost: 決められない（最高得点が同点で複数、または候補ゼロ）→ viewport 座標へ
+ */
+export type Resolution = 'confident' | 'uncertain' | 'lost'
 
 export interface Reply {
   id: string
@@ -101,7 +119,7 @@ export interface HandoffData {
 export interface ImportResult {
   added: number
   merged: number
-  /** selector でも textQuote でも解決できず viewport 座標に落ちた件数。 */
+  /** どの証拠にも一致する候補を決められず viewport 座標に落ちた件数。 */
   unanchored: number
 }
 
@@ -115,7 +133,7 @@ export type HandoffEventMap = {
   'comment:read': Comment
   'comment:unread': Comment
   'reply:add': { comment: Comment; reply: Reply }
-  /** selector で引けなくなった。`resolution` が後退先を示す。 */
+  /** 証拠の一致数が減った（confident→uncertain、または lost へ）。`resolution` が後退先を示す。 */
   'anchor:degraded': { comment: Comment; resolution: Resolution }
   'anchor:recovered': { comment: Comment; resolution: Resolution }
   'mode:change': { mode: HandoffMode }

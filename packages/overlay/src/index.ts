@@ -770,6 +770,7 @@ export const Handoff = {
 
 export { createBridgeAdapter, type BridgeAdapterOptions } from './adapters/bridge'
 export type {
+  A11ySignature,
   Anchor,
   Comment,
   CommentMeta,

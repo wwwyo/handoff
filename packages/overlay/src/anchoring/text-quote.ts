@@ -9,7 +9,7 @@ import type { TextQuote } from '../core/types'
 const EXACT_LENGTH = 120
 const CONTEXT_LENGTH = 30
 
-function normalizeText(text: string): string {
+export function normalizeText(text: string): string {
   return text.replace(/\s+/g, ' ').trim()
 }
 
