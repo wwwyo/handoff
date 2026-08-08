@@ -12,6 +12,20 @@ describe('computeA11y', () => {
     expect(computeA11y(el)?.role).toBe('button')
   })
 
+  it('role 属性が空白区切りの複数トークンなら先頭を採用する', () => {
+    document.body.innerHTML = '<div role="button link">クリック</div>'
+    const el = document.querySelector('div')!
+    // 先頭が採用されないと role 名が "button link" になり NAME_FROM_CONTENT を外れ、
+    // name が取れず signature 自体を作れなくなる
+    expect(computeA11y(el)).toEqual({ role: 'button', name: 'クリック' })
+  })
+
+  it('role 属性の大文字小文字を畳んで比較を安定させる', () => {
+    document.body.innerHTML = '<div role="BUTTON">クリック</div>'
+    const el = document.querySelector('div')!
+    expect(computeA11y(el)?.role).toBe('button')
+  })
+
   it('button タグは暗黙 role button を持つ', () => {
     document.body.innerHTML = '<button>送信</button>'
     const el = document.querySelector('button')!

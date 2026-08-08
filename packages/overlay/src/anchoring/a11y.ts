@@ -74,7 +74,20 @@ function implicitRole(el: Element): string | undefined {
  * 候補に紛れ込み、「誤認より見失いのほうがマシ」という原則に反する曖昧な証拠になる。
  */
 function computeRole(el: Element): string | undefined {
-  return el.getAttribute('role') || implicitRole(el)
+  return explicitRole(el) ?? implicitRole(el)
+}
+
+/**
+ * `role` 属性は空白区切りのトークンリスト（フォールバック role）を取りうるため、
+ * ARIA と同じく先頭トークンだけを採用し、比較を安定させるため小文字に畳む。
+ *
+ * Why not 属性値をそのまま使う: `role="button link"` が role 名 `"button link"` に
+ * なると `NAME_FROM_CONTENT` の判定も一致判定も外れ、その要素は a11y 証拠を
+ * 一切持てなくなる。
+ */
+function explicitRole(el: Element): string | undefined {
+  const first = el.getAttribute('role')?.trim().split(/\s+/)[0]
+  return first ? first.toLowerCase() : undefined
 }
 
 function truncate(text: string): string {
@@ -143,15 +156,25 @@ export function computeA11y(el: Element): A11ySignature | undefined {
   return { role, name }
 }
 
+/**
+ * role を先に比べ、外れた時点で name 計算に入らない。name は `aria-labelledby` の参照
+ * 解決や textContent の走査を伴うため、findByA11y の全候補ぶん実行すると重い。
+ */
 export function matchesA11y(el: Element, sig: A11ySignature): boolean {
-  const current = computeA11y(el)
-  return current !== undefined && current.role === sig.role && current.name === sig.name
+  if (computeRole(el) !== sig.role) return false
+  return computeName(el, sig.role) === sig.name
 }
 
-/** ページ全体を1回走査し、role + name が一致する要素をすべて返す。 */
+/**
+ * role を持ちうる要素だけを走査対象にする。`*` で全要素を回すと、role が決まらず
+ * 必ず候補から外れる div/span まで舐めることになり、大きいページで無駄が大きい。
+ */
+const A11Y_CANDIDATE_SELECTOR = ['[role]', 'a[href]', 'input', ...Object.keys(IMPLICIT_ROLES)].join(',')
+
+/** ページを1回走査し、role + name が一致する要素をすべて返す。 */
 export function findByA11y(sig: A11ySignature): Element[] {
   const matches: Element[] = []
-  for (const el of document.querySelectorAll('*')) {
+  for (const el of document.querySelectorAll(A11Y_CANDIDATE_SELECTOR)) {
     if (matchesA11y(el, sig)) matches.push(el)
   }
   return matches
