@@ -1,6 +1,6 @@
 import type { Anchor, Comment, Resolution } from '../core/types'
 import type { EventEmitter } from '../core/events'
-import { resolveAnchorWithElement, resolveFromElement } from './position'
+import { evidenceCount, resolveAnchorWithElement, resolveFromElement } from './position'
 import { verifyTextQuote } from './text-quote'
 import { matchesA11y } from './a11y'
 
@@ -190,10 +190,10 @@ export class AnchorTracker {
     if (anchor.a11y && matchesA11y(cached, anchor.a11y)) score += 1
     if (anchor.textQuote && verifyTextQuote(cached, anchor.textQuote)) score += 1
 
-    if (score >= 2) return 'confident'
-    if (score === 1) return 'uncertain'
-    // stillValid が真である前提で呼ばれるため、ここには到達しないはずだが、
-    // 型/防御的に uncertain 側へフォールバックしておく。
+    // score 0 は stillValid が真である前提で呼ばれる以上ここには来ないが、来た場合は
+    // evidenceCount と一致してしまう（証拠ゼロのアンカー）ので先に弾く。
+    if (score === 0) return 'uncertain'
+    if (score >= 2 || score === evidenceCount(anchor)) return 'confident'
     return 'uncertain'
   }
 

@@ -66,6 +66,30 @@ function scoreCandidate(el: Element, anchor: Anchor): number {
   return score
 }
 
+/** anchor がそもそも何個の証拠を持っているか（作成時に採取できた数）。 */
+export function evidenceCount(anchor: Anchor): number {
+  let count = 0
+  if (anchor.selector) count += 1
+  if (anchor.a11y) count += 1
+  if (anchor.textQuote) count += 1
+  return count
+}
+
+/**
+ * 得点を確信度に変換する。
+ *
+ * Why not 得票数の絶対値だけで決める: アイコンだけのボタンや画像のように、テキストも
+ * accessible name も採取できない要素は作成時点で selector しか証拠を持てない。得票2以上
+ * だけを confident にすると、この種のアンカーは selector が完全に一致していても永久に
+ * uncertain のままになり、直列フォールバック時代に selector 解決だったものが一律で
+ * 警告表示に劣化する。「3つ持っていて1つしか一致しない」と「1つしか持っておらず
+ * それが一致した」は意味が違うので、持っている証拠が全て一致した場合も confident とする。
+ */
+function toResolution(score: number, anchor: Anchor): Resolution {
+  if (score >= 2 || score === evidenceCount(anchor)) return 'confident'
+  return 'uncertain'
+}
+
 /**
  * 複数証拠の投票でアンカーを解決する。
  *
@@ -94,8 +118,7 @@ function locate(anchor: Anchor): LocatedElement | null {
 
   if (best.length !== 1) return null
 
-  const resolution: Resolution = bestScore >= 2 ? 'confident' : 'uncertain'
-  return { element: best[0] as Element, resolution }
+  return { element: best[0] as Element, resolution: toResolution(bestScore, anchor) }
 }
 
 function positionFromElement(element: Element, anchor: Anchor, resolution: Resolution): ResolvedPosition {

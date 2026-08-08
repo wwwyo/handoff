@@ -68,11 +68,27 @@ describe('createAnchor / resolveAnchor', () => {
     expect(resolved.visible).toBe(true)
   })
 
-  it('証拠が1つだけ一致するときは uncertain を返す', () => {
+  it('selector しか証拠を持たないアンカーは、それが一致すれば confident を返す', () => {
     document.body.innerHTML = '<div id="target">テキスト</div>'
     mockRect(document.getElementById('target')!, { left: 0, top: 0, width: 100, height: 40 })
-    // textQuote・a11y を持たない、selector だけのアンカー
+    // アイコンだけのボタンや画像のように、テキストも accessible name も採取できない要素は
+    // 作成時点で selector しか証拠を持てない。持っている証拠が全て一致している以上、
+    // 得票数が1でも「3つ持っていて1つしか一致しない」状態と同一視してはならない。
     const anchor: Anchor = { selector: '#target', offsetX: 0.5, offsetY: 0.5, viewportX: 0.5, viewportY: 0.5 }
+
+    const resolved = resolveAnchor(anchor)
+    expect(resolved.resolution).toBe('confident')
+  })
+
+  it('3証拠のうち1つしか一致しないときは uncertain を返す', () => {
+    document.body.innerHTML = '<button id="target" aria-label="送信">送信する</button>'
+    const el = document.getElementById('target')!
+    mockRect(el, { left: 0, top: 0, width: 100, height: 40 })
+    const anchor = createAnchor(el, 10, 10)
+
+    // id とラベルとテキストを全て変え、selector だけが一致する状態を作る
+    document.body.innerHTML = '<button id="target" aria-label="確定">確定する</button>'
+    mockRect(document.getElementById('target')!, { left: 0, top: 0, width: 100, height: 40 })
 
     const resolved = resolveAnchor(anchor)
     expect(resolved.resolution).toBe('uncertain')
