@@ -12,12 +12,26 @@ describe('computeA11y', () => {
     expect(computeA11y(el)?.role).toBe('button')
   })
 
-  it('role 属性が空白区切りの複数トークンなら先頭を採用する', () => {
+  it('role 属性が空白区切りの複数トークンなら最初の既知 role を採る', () => {
     document.body.innerHTML = '<div role="button link">クリック</div>'
     const el = document.querySelector('div')!
-    // 先頭が採用されないと role 名が "button link" になり NAME_FROM_CONTENT を外れ、
+    // 属性値をそのまま使うと role 名が "button link" になり NAME_FROM_CONTENT を外れ、
     // name が取れず signature 自体を作れなくなる
-    expect(computeA11y(el)).toEqual({ role: 'button', name: 'クリック' })
+    expect(computeA11y(el)).toEqual({ role: 'button', name: 'クリック', nameFrom: 'content' })
+  })
+
+  it('role 属性の未知トークンは飛ばし、最初の既知 role を採る', () => {
+    document.body.innerHTML = '<div role="future-role button">クリック</div>'
+    const el = document.querySelector('div')!
+    // ARIA のフォールバックは「先頭トークン」ではなく「最初の認識できる role」。
+    // 先頭を無条件に採ると未知 role になり、この要素は a11y 証拠を失う
+    expect(computeA11y(el)?.role).toBe('button')
+  })
+
+  it('既知の role が1つも無ければ暗黙 role へ落ちる', () => {
+    document.body.innerHTML = '<button role="future-role another-unknown">送信</button>'
+    const el = document.querySelector('button')!
+    expect(computeA11y(el)?.role).toBe('button')
   })
 
   it('role 属性の大文字小文字を畳んで比較を安定させる', () => {
@@ -29,7 +43,7 @@ describe('computeA11y', () => {
   it('button タグは暗黙 role button を持つ', () => {
     document.body.innerHTML = '<button>送信</button>'
     const el = document.querySelector('button')!
-    expect(computeA11y(el)).toEqual({ role: 'button', name: '送信' })
+    expect(computeA11y(el)).toEqual({ role: 'button', name: '送信', nameFrom: 'content' })
   })
 
   it('href を持つ a は role link、持たない a は role が決まらず undefined になる', () => {
@@ -83,13 +97,13 @@ describe('computeA11y', () => {
       <input id="email" type="email" />
     `
     const input = document.getElementById('email')!
-    expect(computeA11y(input)).toEqual({ role: 'textbox', name: 'メールアドレス' })
+    expect(computeA11y(input)).toEqual({ role: 'textbox', name: 'メールアドレス', nameFrom: 'author' })
   })
 
   it('img は alt を name にする', () => {
     document.body.innerHTML = '<img alt="ロゴ画像" src="x.png" />'
     const el = document.querySelector('img')!
-    expect(computeA11y(el)).toEqual({ role: 'img', name: 'ロゴ画像' })
+    expect(computeA11y(el)).toEqual({ role: 'img', name: 'ロゴ画像', nameFrom: 'author' })
   })
 
   it('name の正規化: 空白の連続を1つに畳み前後をtrimする', () => {
@@ -120,13 +134,13 @@ describe('computeA11y', () => {
   it('コンテナ系 role でも aria-label があれば name が決まる', () => {
     document.body.innerHTML = '<nav aria-label="メインナビ">ホーム 会社概要</nav>'
     const el = document.querySelector('nav')!
-    expect(computeA11y(el)).toEqual({ role: 'navigation', name: 'メインナビ' })
+    expect(computeA11y(el)).toEqual({ role: 'navigation', name: 'メインナビ', nameFrom: 'author' })
   })
 
   it('listitem は name from content が許されるので textContent を name にする', () => {
     document.body.innerHTML = '<ul><li>項目A</li></ul>'
     const el = document.querySelector('li')!
-    expect(computeA11y(el)).toEqual({ role: 'listitem', name: '項目A' })
+    expect(computeA11y(el)).toEqual({ role: 'listitem', name: '項目A', nameFrom: 'content' })
   })
 })
 
@@ -138,9 +152,9 @@ describe('matchesA11y / findByA11y', () => {
   it('matchesA11y は role と name が両方一致するときだけ true を返す', () => {
     document.body.innerHTML = '<button>送信</button>'
     const el = document.querySelector('button')!
-    expect(matchesA11y(el, { role: 'button', name: '送信' })).toBe(true)
-    expect(matchesA11y(el, { role: 'button', name: '別の名前' })).toBe(false)
-    expect(matchesA11y(el, { role: 'link', name: '送信' })).toBe(false)
+    expect(matchesA11y(el, { role: 'button', name: '送信', nameFrom: 'content' })).toBe(true)
+    expect(matchesA11y(el, { role: 'button', name: '別の名前', nameFrom: 'content' })).toBe(false)
+    expect(matchesA11y(el, { role: 'link', name: '送信', nameFrom: 'content' })).toBe(false)
   })
 
   it('findByA11y はページ全体から role+name が一致する要素をすべて返す', () => {
@@ -149,13 +163,13 @@ describe('matchesA11y / findByA11y', () => {
       <button>キャンセル</button>
       <div><button>送信</button></div>
     `
-    const found = findByA11y({ role: 'button', name: '送信' })
+    const found = findByA11y({ role: 'button', name: '送信', nameFrom: 'content' })
     expect(found).toHaveLength(2)
     expect(found.every((el) => el.tagName === 'BUTTON')).toBe(true)
   })
 
   it('findByA11y は一致が無ければ空配列を返す', () => {
     document.body.innerHTML = '<button>送信</button>'
-    expect(findByA11y({ role: 'button', name: '存在しない名前' })).toEqual([])
+    expect(findByA11y({ role: 'button', name: '存在しない名前', nameFrom: 'content' })).toEqual([])
   })
 })

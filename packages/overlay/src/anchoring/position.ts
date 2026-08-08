@@ -57,21 +57,45 @@ function collectCandidates(anchor: Anchor): Element[] {
   return Array.from(candidates)
 }
 
+/**
+ * a11y の name が textContent 由来のとき、textQuote と同じ文字列を見ているので
+ * 2つの証拠は同時に壊れる。
+ *
+ * Why: 独立した2票として数えると、ラベルを変更したあと古いラベルを持つ別要素が
+ * 相関した2票を得て、selector しか一致しない正しい候補（1票）を 2-1 で上回る。
+ * 投票の前提は壊れ方の直交性なので、相関する証拠は1つの family として1票に畳む。
+ */
+function hasCorrelatedNameEvidence(anchor: Anchor): boolean {
+  return anchor.a11y?.nameFrom === 'content' && anchor.textQuote !== undefined
+}
+
 /** 候補要素について、anchor の持つ証拠のうち何個が一致するかを数える。 */
-function scoreCandidate(el: Element, anchor: Anchor): number {
+export function scoreCandidate(el: Element, anchor: Anchor): number {
   let score = 0
   if (anchor.selector && matchesSelector(el, anchor.selector)) score += 1
-  if (anchor.a11y && matchesA11y(el, anchor.a11y)) score += 1
-  if (anchor.textQuote && verifyTextQuote(el, anchor.textQuote)) score += 1
+
+  const a11yHit = anchor.a11y !== undefined && matchesA11y(el, anchor.a11y)
+  const textHit = anchor.textQuote !== undefined && verifyTextQuote(el, anchor.textQuote)
+
+  if (hasCorrelatedNameEvidence(anchor)) {
+    if (a11yHit || textHit) score += 1
+  } else {
+    if (a11yHit) score += 1
+    if (textHit) score += 1
+  }
   return score
 }
 
-/** anchor がそもそも何個の証拠を持っているか（作成時に採取できた数）。 */
+/** anchor がそもそも何個の証拠を持っているか（相関するものは1つと数える）。 */
 export function evidenceCount(anchor: Anchor): number {
   let count = 0
   if (anchor.selector) count += 1
-  if (anchor.a11y) count += 1
-  if (anchor.textQuote) count += 1
+  if (hasCorrelatedNameEvidence(anchor)) {
+    count += 1
+  } else {
+    if (anchor.a11y) count += 1
+    if (anchor.textQuote) count += 1
+  }
   return count
 }
 

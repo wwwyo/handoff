@@ -57,9 +57,16 @@ export interface TextQuote {
 }
 
 /** role + accessible name による同定。selector・textQuote に次ぐ第3の証拠。 */
+/**
+ * accessible name の出どころ。`content` は要素の textContent 由来で、`textQuote` と
+ * 同じ文字列を見ているため独立した証拠にならない（投票で1票に畳む根拠になる）。
+ */
+export type NameSource = 'author' | 'content'
+
 export interface A11ySignature {
   role: string
   name: string
+  nameFrom: NameSource
 }
 
 /**
