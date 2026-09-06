@@ -10,13 +10,13 @@ importers:
     devDependencies:
       '@modelcontextprotocol/sdk':
         specifier: 1.30.0
-        version: 1.30.0(zod@4.4.3)
+        version: 1.30.0(zod@4.5.1)
       '@playwright/test':
         specifier: 1.62.1
         version: 1.62.1
       '@types/node':
-        specifier: 26.2.0
-        version: 26.2.0
+        specifier: 26.4.0
+        version: 26.4.0
       jsdom:
         specifier: 30.0.1
         version: 30.0.1
@@ -25,10 +25,10 @@ importers:
         version: 7.0.2
       vite:
         specifier: 8.2.2
-        version: 8.2.2(@types/node@26.2.0)
+        version: 8.2.2(@types/node@26.4.0)
       vitest:
         specifier: 4.1.11
-        version: 4.1.11(@types/node@26.2.0)(jsdom@30.0.1)(vite@8.2.2(@types/node@26.2.0))
+        version: 4.1.11(@types/node@26.4.0)(jsdom@30.0.1)(vite@8.2.2(@types/node@26.4.0))
 
   examples/playground:
     dependencies:
@@ -45,8 +45,8 @@ importers:
         specifier: 8.23.0
         version: 8.23.0
       zod:
-        specifier: 4.4.3
-        version: 4.4.3
+        specifier: 4.5.1
+        version: 4.5.1
     devDependencies:
       '@types/pg':
         specifier: 8.23.1
@@ -253,6 +253,9 @@ packages:
 
   '@types/node@26.2.0':
     resolution: {integrity: sha512-5IviulTZeRNp2vAJ514cc/HUlY5nZ9fCbq9DMyC52BrhFZACo3nI0R7qBxhQmo/d27NFe96ur/b7Wwxklda+kg==}
+
+  '@types/node@26.4.0':
+    resolution: {integrity: sha512-faiGnoIrLH/V8cibOMEAZ8pMw6oXqSukl29ra4mN8GdaB2ZewzeaLj+INpV5N+Z1eKWzY+IzaIZH2EIR6YZRNQ==}
 
   '@types/pg@8.23.1':
     resolution: {integrity: sha512-fKVHpikPdg4GKks3JuLEhvwSyvwzF23hnabPy6DD8ljVbC7+6J5dQzdv4arV6jqq57djnMgs1HKBxX4P8aBI3A==}
@@ -1200,8 +1203,8 @@ packages:
     peerDependencies:
       zod: ^3.25.28 || ^4
 
-  zod@4.4.3:
-    resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
+  zod@4.5.1:
+    resolution: {integrity: sha512-P3GqeAEOEDqKvafVGLezbg+39YW/ze4xrD4qdS0adOY8eoI3zfjv1PQM4UwQzgT8mZKXEbqtVt8K+ZKGqkMFKg==}
 
 snapshots:
 
@@ -1256,7 +1259,7 @@ snapshots:
 
   '@jridgewell/sourcemap-codec@1.5.5': {}
 
-  '@modelcontextprotocol/sdk@1.30.0(zod@4.4.3)':
+  '@modelcontextprotocol/sdk@1.30.0(zod@4.5.1)':
     dependencies:
       '@hono/node-server': 2.0.12(hono@4.12.33)
       ajv: 8.20.0
@@ -1273,8 +1276,8 @@ snapshots:
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
       raw-body: 3.0.2
-      zod: 4.4.3
-      zod-to-json-schema: 3.25.2(zod@4.4.3)
+      zod: 4.5.1
+      zod-to-json-schema: 3.25.2(zod@4.5.1)
     transitivePeerDependencies:
       - supports-color
 
@@ -1343,6 +1346,10 @@ snapshots:
   '@types/estree@1.0.9': {}
 
   '@types/node@26.2.0':
+    dependencies:
+      undici-types: 8.3.0
+
+  '@types/node@26.4.0':
     dependencies:
       undici-types: 8.3.0
 
@@ -1421,13 +1428,13 @@ snapshots:
       chai: 6.2.2
       tinyrainbow: 3.1.1
 
-  '@vitest/mocker@4.1.11(vite@8.2.2(@types/node@26.2.0))':
+  '@vitest/mocker@4.1.11(vite@8.2.2(@types/node@26.4.0))':
     dependencies:
       '@vitest/spy': 4.1.11
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
-      vite: 8.2.2(@types/node@26.2.0)
+      vite: 8.2.2(@types/node@26.4.0)
 
   '@vitest/pretty-format@4.1.11':
     dependencies:
@@ -2113,7 +2120,7 @@ snapshots:
 
   vary@1.1.2: {}
 
-  vite@8.2.2(@types/node@26.2.0):
+  vite@8.2.2(@types/node@26.4.0):
     dependencies:
       lightningcss: 1.33.0
       picomatch: 4.0.5
@@ -2121,13 +2128,13 @@ snapshots:
       rolldown: 1.2.5
       tinyglobby: 0.2.17
     optionalDependencies:
-      '@types/node': 26.2.0
+      '@types/node': 26.4.0
       fsevents: 2.3.3
 
-  vitest@4.1.11(@types/node@26.2.0)(jsdom@30.0.1)(vite@8.2.2(@types/node@26.2.0)):
+  vitest@4.1.11(@types/node@26.4.0)(jsdom@30.0.1)(vite@8.2.2(@types/node@26.4.0)):
     dependencies:
       '@vitest/expect': 4.1.11
-      '@vitest/mocker': 4.1.11(vite@8.2.2(@types/node@26.2.0))
+      '@vitest/mocker': 4.1.11(vite@8.2.2(@types/node@26.4.0))
       '@vitest/pretty-format': 4.1.11
       '@vitest/runner': 4.1.11
       '@vitest/snapshot': 4.1.11
@@ -2144,10 +2151,10 @@ snapshots:
       tinyexec: 1.3.0
       tinyglobby: 0.2.17
       tinyrainbow: 3.1.1
-      vite: 8.2.2(@types/node@26.2.0)
+      vite: 8.2.2(@types/node@26.4.0)
       why-is-node-running: 2.3.0
     optionalDependencies:
-      '@types/node': 26.2.0
+      '@types/node': 26.4.0
       jsdom: 30.0.1
     transitivePeerDependencies:
       - msw
@@ -2193,8 +2200,8 @@ snapshots:
 
   xtend@4.0.2: {}
 
-  zod-to-json-schema@3.25.2(zod@4.4.3):
+  zod-to-json-schema@3.25.2(zod@4.5.1):
     dependencies:
-      zod: 4.4.3
+      zod: 4.5.1
 
-  zod@4.4.3: {}
+  zod@4.5.1: {}
