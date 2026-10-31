@@ -15,7 +15,7 @@ jobs:
 
       # mise.toml の pin をそのまま使う。ここで node/pnpm のバージョンを
       # 書き直すと、ローカルと CI で暗黙に食い違う
-      - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
+      - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
         with:
           version: 2026.7.7
 
